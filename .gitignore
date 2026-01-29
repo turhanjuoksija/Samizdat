@@ -1,0 +1,38 @@
+# Android Build System
+.gradle/
+build/
+app/build/
+captured/
+artifacts/
+
+# Local configuration (SDK location etc.)
+local.properties
+
+# IntelliJ / Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# VS Code
+.vscode/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Secrets & Keys (CRITICAL)
+*.pem
+private.pem
+public.pem
+samizdat_dev_key
+samizdat_dev_key.pub
+*.jks
+*.keystore
+
+# Temporary files
+*.log
+*.tmp
+
+# Large Media / Assets
+video/
