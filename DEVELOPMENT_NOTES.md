@@ -60,12 +60,13 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - **Background Sync**: DHT-haku ja Status Broadcast tapahtuvat taustasäikeissä (`viewModelScope`) jumiutumisen välttämiseksi.
 
 ## 11. Tekninen ympäristö & Kääntäminen (Java 17) ☕
-- **Java versio**: Android Gradle Plugin 8.2+ ja Room 2.7 vaativat **Java 17** kääntäjän (JDK 17). 
-- **Ongelmat**: Jos saat virheen `Android Gradle plugin requires Java 17 to run. You are currently using Java 11.`, päivitä `JAVA_HOME` tai tarkista IDE:n Gradle-asetukset.
+- **Java versio**: Android Gradle Plugin 8.2+ ja Room 2.7 vaativat **Java 17** kääntäjän (JDK 17).
+- **Ongelmat**: Jos saat virheen `Android Gradle plugin requires Java 17 to run.`, varmista että Java 17 on asennettu (`sudo apt install openjdk-17-jdk` Linuxilla).
+- **Konfiguraatio**: Jos IDE ei löydä Javaa, lisää `gradle.properties` tiedostoon rivi: `org.gradle.java.home=/usr/lib/jvm/java-17-openjdk-amd64` (polku voi vaihdella käyttöjärjestelmästä riippuen).
 - **Gradle JVM Args**: Android-kehitinympäristössä `kapt` ja `compose` saattavat vaatia enemmän muistia. `gradle.properties` tiedostossa on `org.gradle.jvmargs=-Xmx2048m`, jotta kääntäminen ei kaadu muistiin (OutOfMemoryError).
 
 ---
-*Päivitetty viimeksi: 2026-01-24 (Map UI & Role UX)*
+*Päivitetty viimeksi: 2026-02-01 (Java 17 Fix)*
 
 ## 12. Kartan ja Käyttöliittymän Päivitykset (UI/UX) - 24.1.2026 🗺️
 - **Undo-toiminto**: Korvattu kaksi erillistä poistonappia yhdellä `Undo (↩️)` -painikkeella, joka poistaa viimeisimmän reittipisteen.
@@ -76,3 +77,7 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - **Roolinvaihto bugi korjattu**: Roolin vaihtaminen tyhjentää nyt varmuudella _kaikki_ vanhat reittitiedot, estäen haamuviivojen jäämisen kartalle.
 - **Mukautetut Karttamerkit**: Toteutettu emoji-pohjaiset pyöreät ikonit aloituspisteelle (🏠/🚗/🙋) ja numeroitavat kultaiset pallot reittipistille (1, 2, 3...).
 - **Suorat viivat poistettu Drivereilta**: Syaaniväriset "varaviivat" eivät enää näy Driver-roolissa, vain Passenger-roolissa jos tiepohjaista reittiä ei ole laskettu.
+
+https://github.com/turhanjuoksija/Samizdat
+https://github.com/turhanjuoksija/Samizdat/releases
+
