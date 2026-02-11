@@ -3,7 +3,7 @@ package com.example.samizdat
 import android.Manifest
 import android.content.Context
 import android.graphics.Bitmap
-import android.net.wifi.WifiManager
+
 import android.os.Build
 import android.os.Bundle
 import android.security.keystore.KeyGenParameterSpec
@@ -56,7 +56,6 @@ import java.net.NetworkInterface
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.spec.ECGenParameterSpec
-import android.net.nsd.NsdServiceInfo
 import org.json.JSONObject
 import org.osmdroid.util.GeoPoint
 import com.example.samizdat.ConnectionManager
@@ -67,7 +66,6 @@ import com.example.samizdat.PeersViewModelFactory
 class MainActivity : ComponentActivity() {
 
     private lateinit var viewModel: PeersViewModel
-    private var multicastLock: WifiManager.MulticastLock? = null
     
     // Identity State
     private var myPublicKeyHash by mutableStateOf<String?>(null)
@@ -80,16 +78,12 @@ class MainActivity : ComponentActivity() {
         // --- Dependency Injection (Manual) ---
         val context = applicationContext
         val db = AppDatabase.getDatabase(context)
-        val nsdHelper = NsdHelper(context)
-        
-        // Tor Manager (Requires Application Context) - Held by ViewModel for survival
         val torManager = SamizdatTorManager(application)
-        
         val connectionManager = ConnectionManager()
-        val repository = PeerRepository(db.peerDao(), db.messageDao(), db.vouchDao(), nsdHelper, connectionManager)
+        val repository = PeerRepository(db.peerDao(), db.messageDao(), db.vouchDao(), connectionManager)
         val updateManager = UpdateManager(application, torManager)
         
-        val factory = PeersViewModelFactory(repository, nsdHelper, torManager, updateManager)
+        val factory = PeersViewModelFactory(repository, torManager, updateManager)
         viewModel = ViewModelProvider(this, factory)[PeersViewModel::class.java]
 
         // Load saved nickname
@@ -103,19 +97,16 @@ class MainActivity : ComponentActivity() {
                 val (hash, fullKey) = generateAndHashKey()
                 myPublicKeyHash = hash
                 myFullPublicKey = fullKey
-                // Initial registration
-                viewModel.registerService(myNickname, hash)
             } catch (e: Exception) {
                 Log.e("MainActivity", "Error generating identity", e)
             }
         }
 
-        // Re-register when Onion Address becomes available
+        // Log when Tor comes online
         lifecycleScope.launch {
             viewModel.torOnionAddress.collect { onion ->
-                if (onion != null && myPublicKeyHash != null) {
-                    Log.i("MainActivity", "Tor Online! Re-registering with Onion: $onion")
-                    viewModel.updateMyStatus(myNickname, myPublicKeyHash!!)
+                if (onion != null) {
+                    Log.i("MainActivity", "Tor Online! Onion: $onion")
                 }
             }
         }
@@ -141,9 +132,6 @@ class MainActivity : ComponentActivity() {
                             onNicknameChange = { newNick ->
                                 myNickname = newNick
                                 prefs.edit().putString("nickname", newNick).apply()
-                                if (myPublicKeyHash != null) {
-                                    viewModel.registerService(newNick, myPublicKeyHash!!)
-                                }
                             }
                         )
                     }
@@ -165,34 +153,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        acquireMulticastLock()
-        // Register & Discover
-        val hash = myPublicKeyHash
-        if (hash != null) {
-            viewModel.registerService(myNickname, hash)
-        }
-        viewModel.startDiscovery()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        viewModel.stopDiscovery()
-        releaseMulticastLock()
-    }
-
-    private fun acquireMulticastLock() {
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        multicastLock = wifiManager.createMulticastLock("SamizdatMulticastLock").apply {
-            setReferenceCounted(true)
-            acquire()
-        }
-    }
-
-    private fun releaseMulticastLock() {
-        multicastLock?.release()
-    }
+    // NSD/mDNS removed — all peer communication now goes through Tor
 }
 
 enum class SamizdatTab(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
@@ -229,7 +190,7 @@ fun MainScreen(
     
     // State Observation
     val savedPeers by viewModel.storedPeers.collectAsState(initial = emptyList())
-    val discoveredPeers = viewModel.nsdHelper.discoveredPeers
+
 
     // QR Code
     val qrContent = remember(myNickname, onionAddress, myIp) {
@@ -334,7 +295,6 @@ fun MainScreen(
                     ContactsScreen(
                         viewModel = viewModel,
                         savedPeers = filteredContacts,
-                        discoveredPeers = discoveredPeers,
                         onPeerClick = { showMessageDialog = it }
                     )
                 }

@@ -1,10 +1,7 @@
 package com.example.samizdat
 
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageInstaller
-import android.net.Uri
 import android.util.Log
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
@@ -22,16 +19,34 @@ class UpdateManager(
     private val torManager: SamizdatTorManager
 ) {
 
+    val currentVersionCode: Int = try {
+        val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            pInfo.longVersionCode.toInt()
+        } else {
+            @Suppress("DEPRECATION")
+            pInfo.versionCode
+        }
+    } catch (_: Exception) { 0 }
+
     /**
      * Downloads the APK from an Onion URL using Tor, verifies the signature, and prompts install.
      */
     suspend fun downloadAndInstall(onionUrl: String, expectedSignature: String, version: Int) {
+        // --- Downgrade Protection ---
+        if (version <= currentVersionCode) {
+            Log.w("UpdateManager", "Rejected update: offered version $version <= installed version $currentVersionCode")
+            return
+        }
+        // --- End Downgrade Protection ---
+
         val fileName = "update_v$version.apk"
-        val file = File(context.cacheDir, fileName)
+        val updateDir = File(context.cacheDir, "updates").apply { mkdirs() }
+        val file = File(updateDir, fileName)
 
         withContext(Dispatchers.IO) {
             try {
-                Log.i("UpdateManager", "Starting download from $onionUrl")
+                Log.i("UpdateManager", "Starting download of v$version (current: v$currentVersionCode) from $onionUrl")
                 downloadFileOverTor(onionUrl, file)
                 
                 Log.i("UpdateManager", "Download complete. Verifying signature...")
@@ -57,8 +72,8 @@ class UpdateManager(
     }
 
     private fun downloadFileOverTor(urlStr: String, destination: File) {
-        // Use Tor SOCKS Proxy (usually 127.0.0.1:9050 or similar, defined in TorManager)
-        val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", 9050))
+        val socksPort = torManager.socksPort.value ?: throw IllegalStateException("Tor SOCKS port not available yet")
+        val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
         val url = URL(urlStr)
         val conn = url.openConnection(proxy) as HttpURLConnection
         conn.connectTimeout = 30000

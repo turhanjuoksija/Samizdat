@@ -21,7 +21,6 @@ import android.location.Location
 fun ContactsScreen(
     viewModel: PeersViewModel,
     savedPeers: List<Peer>,
-    discoveredPeers: List<android.net.nsd.NsdServiceInfo>,
     onPeerClick: (Peer) -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current

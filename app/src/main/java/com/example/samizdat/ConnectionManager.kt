@@ -16,6 +16,18 @@ import java.net.InetSocketAddress
 class ConnectionManager {
     private var serverSocket: ServerSocket? = null
     private var isRunning = false
+
+    // --- Input Protection ---
+    companion object {
+        private const val TAG = "ConnectionManager"
+        private const val MAX_MESSAGE_SIZE = 65_536       // 64 KB
+        private const val RATE_LIMIT_WINDOW_MS = 60_000L  // 1 minute
+        private const val RATE_LIMIT_MAX_MESSAGES = 30    // per IP per window
+        private const val SOCKET_TIMEOUT_MS = 60_000      // idle connection timeout
+    }
+
+    // Track message counts per IP for rate limiting
+    private val rateLimitMap = java.util.concurrent.ConcurrentHashMap<String, MutableList<Long>>()
     
     // Emissions of received messages: Pair(SenderIP, MessageContent)
     private val _incomingMessages = MutableSharedFlow<Pair<String, String>>()
@@ -47,24 +59,61 @@ class ConnectionManager {
 
     private suspend fun handleClient(socket: Socket) = withContext(Dispatchers.IO) {
         try {
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+            socket.soTimeout = SOCKET_TIMEOUT_MS
+            val inputStream = socket.getInputStream()
             val writer = PrintWriter(socket.getOutputStream(), true)
-            val senderIp = socket.inetAddress.hostAddress
-            
-            // Allow multiple lines? For now, just read one line as a message
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                line?.let { msg ->
-                    Log.d(TAG, "Received from $senderIp: $msg")
-                    _incomingMessages.emit((senderIp ?: "Unknown") to msg)
-                    // Application-level ACK
+            val senderIp = socket.inetAddress.hostAddress ?: "Unknown"
+
+            // Read messages line by line with size limit
+            val sb = StringBuilder()
+            var ch: Int
+            while (inputStream.read().also { ch = it } != -1) {
+                if (ch == '\n'.code) {
+                    val msg = sb.toString().trimEnd('\r')
+                    sb.clear()
+
+                    if (msg.isEmpty()) continue
+
+                    // Rate limiting check
+                    if (!checkRateLimit(senderIp)) {
+                        Log.w(TAG, "Rate limit exceeded for $senderIp, dropping message")
+                        writer.println("RATE_LIMITED")
+                        continue
+                    }
+
+                    Log.d(TAG, "Received from $senderIp: ${msg.take(200)}${if (msg.length > 200) "..." else ""}")
+                    _incomingMessages.emit(senderIp to msg)
                     writer.println("OK")
+                } else {
+                    sb.append(ch.toChar())
+                    if (sb.length > MAX_MESSAGE_SIZE) {
+                        Log.w(TAG, "Message from $senderIp exceeded $MAX_MESSAGE_SIZE bytes, dropping connection")
+                        break
+                    }
                 }
             }
             socket.close()
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.w(TAG, "Client connection timed out")
         } catch (e: Exception) {
             Log.e(TAG, "Error handling client", e)
+        } finally {
+            try { socket.close() } catch (_: Exception) {}
         }
+    }
+
+    private fun checkRateLimit(ip: String): Boolean {
+        val now = System.currentTimeMillis()
+        val timestamps = rateLimitMap.getOrPut(ip) { mutableListOf() }
+        synchronized(timestamps) {
+            // Remove old entries outside the window
+            timestamps.removeAll { it < now - RATE_LIMIT_WINDOW_MS }
+            if (timestamps.size >= RATE_LIMIT_MAX_MESSAGES) {
+                return false
+            }
+            timestamps.add(now)
+        }
+        return true
     }
 
     suspend fun sendMessage(ip: String, port: Int, message: String, socksPort: Int = 9050) = withContext(Dispatchers.IO) {
@@ -113,9 +162,6 @@ class ConnectionManager {
         } catch (e: Exception) {
             Log.e(TAG, "Error closing server", e)
         }
-    }
-    
-    companion object {
-        private const val TAG = "ConnectionManager"
+        rateLimitMap.clear()
     }
 }

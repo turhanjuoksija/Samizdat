@@ -27,7 +27,6 @@ import androidx.compose.runtime.setValue
  */
 class PeersViewModel(
     private val repository: PeerRepository,
-    val nsdHelper: NsdHelper,
     val torManager: SamizdatTorManager,
     val updateManager: UpdateManager
 ) : ViewModel() {
@@ -285,25 +284,7 @@ class PeersViewModel(
         return repository.getMessagesForPeer(peerPk)
     }
 
-    fun registerService(nickname: String, hash: String) {
-        val onion = torManager.onionAddress.value
-        repository.registerMyService(12345, nickname, hash, myRole, mySeats, myInfo, onion)
-    }
 
-    fun updateMyStatus(nickname: String, hash: String) {
-        val onion = torManager.onionAddress.value
-        repository.stopDiscovery()
-        repository.registerMyService(12345, nickname, hash, myRole, mySeats, myInfo, onion)
-        repository.startDiscovery()
-    }
-
-    fun startDiscovery() {
-        repository.startDiscovery()
-    }
-
-    fun stopDiscovery() {
-        repository.stopDiscovery()
-    }
 
     fun savePeer(
         lastKnownIp: String, 
@@ -672,8 +653,10 @@ class PeersViewModel(
         val url = json.optString("url", "")
         val sig = json.optString("sig", "")
         
-        if (version > 0 && url.isNotEmpty() && sig.isNotEmpty()) {
-            _debugLogs.add(0, "UPDATE: Found version $version. Downloading...")
+        val currentVersion = updateManager.currentVersionCode
+
+        if (version > 0 && url.isNotEmpty() && sig.isNotEmpty() && version > currentVersion) {
+            _debugLogs.add(0, "UPDATE: v$version available (current: v$currentVersion). Downloading...")
             viewModelScope.launch {
                 try {
                     updateManager.downloadAndInstall(url, sig, version)
@@ -690,21 +673,19 @@ class PeersViewModel(
     override fun onCleared() {
         super.onCleared()
         repository.stopServer()
-        repository.stopDiscovery()
         torManager.stopTor()
     }
 }
 
 class PeersViewModelFactory(
     private val repository: PeerRepository, 
-    private val nsdHelper: NsdHelper,
     private val torManager: SamizdatTorManager,
     private val updateManager: UpdateManager
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(PeersViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return PeersViewModel(repository, nsdHelper, torManager, updateManager) as T
+            return PeersViewModel(repository, torManager, updateManager) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
