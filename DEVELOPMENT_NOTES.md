@@ -45,6 +45,7 @@ RadioGrid jakaa maailman ~500m x 500m kokoisiin "sääruutuihin" (Grid cells).
 ## 6. Road-Based Routing (OSRM) 🛣️
 Emme käytä enää suoria "linnun tietä" -viivoja.
 - **Service**: `RoutingService.kt` käyttää OSRM Demo API:a (`project-osrm.org`) reitin laskemiseen.
+  - **HUOM**: Tämä on ilmainen demo-palvelu, jota **ei saa käyttää kaupallisesti tai raskaaseen liikenteeseen**. Lopullisessa tuotantoversiossa tarvitset oman OSRM-serverin tai maksullisen reitityspalvelun (esim. Mapbox).
 - **Grids from Route**: `RadioGridUtils.getRouteGridsFromPolyline()` muuntaa tieuran listaksi Grid-ID:itä, joihin kuljettajan ilmoitus propagoidaan.
 
 ## 7. .onion Osoitteiden Käsittely (`OnionUtils`) 🌐
