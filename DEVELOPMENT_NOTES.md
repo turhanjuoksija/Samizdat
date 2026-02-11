@@ -16,6 +16,7 @@ Android Gradle Plugin (AGP) 8.x + Kotlin 1.9.x aiheuttavat usein "Duplicate arch
 ## 3. Tor Konfiguraatio (SOCKS Port) 🔌
 Tor-runtime vaatii tarkan tavan asettaa SOCKS-portti.
 - **Huomio**: Käytä aina `toPortEphemeral()` funktiota (yli 1024 portit), muuten Tor saattaa epäonnistua käynnistyksessä joillakin laitteilla.
+- **Portti**: SOCKS-portti tulee aina lukea dynaamisesti `torManager.socksPort.value` kautta. **ÄLÄ** käytä hardkoodattua porttia 9050.
 
 ## 4. Samizdat Envelope Protocol (v1 & v2 DHT) 📨
 Viestit kulkevat JSON-kääreessä ("Envelope").
@@ -57,7 +58,10 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - **Varoitus**: Jokainen `version` numeron korotus `AppDatabase.kt` tiedostossa **PYYHKII KAIKKI TIEDOT**.
 
 ## 9. Verkkoviestintä & Aikakatkaisut ⏳
-- **Timeout**: `ConnectionManager` käyttää 30 sekunnin timeoutia Tor-yhteyksille.
+- **Timeout (lähetys)**: `ConnectionManager.sendMessage()` käyttää 30 sekunnin connect-timeoutia Tor-yhteyksille.
+- **Timeout (vastaanotto)**: Idle-yhteydet katkaistaan automaattisesti 60 sekunnin jälkeen (`SOCKET_TIMEOUT_MS`).
+- **Viestin kokorajoitus**: Yksittäinen viesti saa olla enintään 64 KB (`MAX_MESSAGE_SIZE = 65_536`). Ylitys katkaisee yhteyden.
+- **Nopeusrajoitus**: Enintään 30 viestiä / 60 sekuntia per IP-osoite (`RATE_LIMIT_MAX_MESSAGES`). Ylitys palauttaa `RATE_LIMITED`.
 - **Background Sync**: DHT-haku ja Status Broadcast tapahtuvat taustasäikeissä (`viewModelScope`) jumiutumisen välttämiseksi.
 
 ## 11. Tekninen ympäristö & Kääntäminen (Java 17) ☕
@@ -67,7 +71,7 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - **Gradle JVM Args**: Android-kehitinympäristössä `kapt` ja `compose` saattavat vaatia enemmän muistia. `gradle.properties` tiedostossa on `org.gradle.jvmargs=-Xmx2048m`, jotta kääntäminen ei kaadu muistiin (OutOfMemoryError).
 
 ---
-*Päivitetty viimeksi: 2026-02-01 (Java 17 Fix)*
+*Päivitetty viimeksi: 2026-02-12 (Security Hardening)*
 
 ## 12. Kartan ja Käyttöliittymän Päivitykset (UI/UX) - 24.1.2026 🗺️
 - **Undo-toiminto**: Korvattu kaksi erillistä poistonappia yhdellä `Undo (↩️)` -painikkeella, joka poistaa viimeisimmän reittipisteen.
@@ -79,6 +83,12 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - **Mukautetut Karttamerkit**: Toteutettu emoji-pohjaiset pyöreät ikonit aloituspisteelle (🏠/🚗/🙋) ja numeroitavat kultaiset pallot reittipistille (1, 2, 3...).
 - **Suorat viivat poistettu Drivereilta**: Syaaniväriset "varaviivat" eivät enää näy Driver-roolissa, vain Passenger-roolissa jos tiepohjaista reittiä ei ole laskettu.
 
+## 13. Tietoturvaparannukset (Security Hardening) - 12.2.2026 🔒
+- **Päivityksen downgrade-suojaus**: `UpdateManager` hylkää päivitykset, joiden versiokoodi on <= nykyinen asennettu versio. Estää hyökkääjää pakottamasta vanhaa, haavoittuvaa versiota.
+- **FileProvider rajoitettu**: `file_paths.xml` sallii nyt vain `updates/`-alihakemiston (aiemmin koko cache-hakemisto `path="."`). APK-tiedostot tallennetaan nyt `cacheDir/updates/` kansioon.
+- **NSD/mDNS poistettu**: `NsdHelper.kt` poistettu kokonaan, WiFi-oikeudet (`ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE`) poistettu manifestista. Kaikki vertaisviestintä kulkee nyt vain Torin kautta — paikallisverkkoon ei vuoda mitään.
+- **Input-validointi**: `ConnectionManager` rajoittaa viestikoon (64 KB), katkaisee idle-yhteydet (60s), ja rajoittaa viestien määrää per IP (30/min). Estää OOM- ja flooding-hyökkäykset.
+- **SOCKS-portti**: `UpdateManager` käyttää nyt dynaamista Tor-porttia (`torManager.socksPort.value`) hardkoodatun 9050:n sijaan.
+
 https://github.com/turhanjuoksija/Samizdat
 https://github.com/turhanjuoksija/Samizdat/releases
-
