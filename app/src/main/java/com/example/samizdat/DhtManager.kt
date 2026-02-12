@@ -198,19 +198,30 @@ class DhtManager(
         
         val gridId = json.optString("grid_id", "")
         val senderOnion = json.optString("sender_onion", "")
-        val senderNick = json.optString("sender_nick", "Unknown")
-        val content = json.optString("content", "")
+        val senderNick = MessageValidator.sanitizeString(json.optString("sender_nick", "Unknown"), MessageValidator.MAX_NICKNAME_LENGTH)
+        val content = MessageValidator.sanitizeString(json.optString("content", ""), MessageValidator.MAX_CONTENT_LENGTH)
         val timestamp = json.optLong("timestamp", System.currentTimeMillis())
-        val ttl = json.optInt("ttl", 3600)
-        
-        // Parse route data
+        val ttl = MessageValidator.clampTtl(json.optInt("ttl", 3600))
+
+        // Validate required fields
+        if (!MessageValidator.isValidGridId(gridId)) return
+        if (content.isEmpty()) return
+        if (!MessageValidator.isValidOnionAddress(senderOnion)) return
+        if (!MessageValidator.isValidTimestamp(timestamp)) return
+
+        // Parse route data with size limit
         val routePointsJson = json.optJSONArray("route_points")
         val routePoints = mutableListOf<Pair<Double, Double>>()
         if (routePointsJson != null) {
-            for (i in 0 until routePointsJson.length()) {
+            val limit = minOf(routePointsJson.length(), MessageValidator.MAX_ROUTE_POINTS)
+            for (i in 0 until limit) {
                 val point = routePointsJson.optJSONArray(i)
                 if (point != null && point.length() >= 2) {
-                    routePoints.add(Pair(point.getDouble(0), point.getDouble(1)))
+                    val lat = point.getDouble(0)
+                    val lon = point.getDouble(1)
+                    if (MessageValidator.isValidLatitude(lat) && MessageValidator.isValidLongitude(lon)) {
+                        routePoints.add(Pair(lat, lon))
+                    }
                 }
             }
         }
@@ -218,21 +229,29 @@ class DhtManager(
         val routeGridsJson = json.optJSONArray("route_grids")
         val routeGrids = mutableListOf<String>()
         if (routeGridsJson != null) {
-            for (i in 0 until routeGridsJson.length()) {
-                routeGrids.add(routeGridsJson.getString(i))
+            val limit = minOf(routeGridsJson.length(), MessageValidator.MAX_ROUTE_GRIDS)
+            for (i in 0 until limit) {
+                val g = routeGridsJson.optString(i, "")
+                if (MessageValidator.isValidGridId(g)) {
+                    routeGrids.add(g)
+                }
             }
         }
         
-        val originLat = if (json.has("origin_lat") && !json.isNull("origin_lat")) json.getDouble("origin_lat") else null
-        val originLon = if (json.has("origin_lon") && !json.isNull("origin_lon")) json.getDouble("origin_lon") else null
-        val destLat = if (json.has("dest_lat") && !json.isNull("dest_lat")) json.getDouble("dest_lat") else null
-        val destLon = if (json.has("dest_lon") && !json.isNull("dest_lon")) json.getDouble("dest_lon") else null
-        val seats = json.optInt("seats", 0)
-        val driverLat = if (json.has("driver_lat") && !json.isNull("driver_lat")) json.getDouble("driver_lat") else null
-        val driverLon = if (json.has("driver_lon") && !json.isNull("driver_lon")) json.getDouble("driver_lon") else null
+        val rawOrigin = MessageValidator.validateCoordinate(
+            if (json.has("origin_lat") && !json.isNull("origin_lat")) json.getDouble("origin_lat") else null,
+            if (json.has("origin_lon") && !json.isNull("origin_lon")) json.getDouble("origin_lon") else null
+        )
+        val rawDest = MessageValidator.validateCoordinate(
+            if (json.has("dest_lat") && !json.isNull("dest_lat")) json.getDouble("dest_lat") else null,
+            if (json.has("dest_lon") && !json.isNull("dest_lon")) json.getDouble("dest_lon") else null
+        )
+        val rawDriver = MessageValidator.validateCoordinate(
+            if (json.has("driver_lat") && !json.isNull("driver_lat")) json.getDouble("driver_lat") else null,
+            if (json.has("driver_lon") && !json.isNull("driver_lon")) json.getDouble("driver_lon") else null
+        )
+        val seats = MessageValidator.clampSeats(json.optInt("seats", 0))
 
-        if (gridId.isEmpty() || content.isEmpty()) return
-        
         val message = KademliaNode.GridMessage(
             gridId = gridId,
             senderOnion = senderOnion,
@@ -242,13 +261,13 @@ class DhtManager(
             ttlSeconds = ttl,
             routePoints = routePoints,
             routeGrids = routeGrids,
-            originLat = originLat,
-            originLon = originLon,
-            destLat = destLat,
-            destLon = destLon,
+            originLat = rawOrigin?.first,
+            originLon = rawOrigin?.second,
+            destLat = rawDest?.first,
+            destLon = rawDest?.second,
             availableSeats = seats,
-            driverCurrentLat = driverLat,
-            driverCurrentLon = driverLon
+            driverCurrentLat = rawDriver?.first,
+            driverCurrentLon = rawDriver?.second
         )
         
         // Store if we don't already have it (deduplicate by timestamp+sender)

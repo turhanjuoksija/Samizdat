@@ -193,17 +193,30 @@ class PeersViewModel(
                     senderNick = if (json.isNull("f_nick")) null else json.optString("f_nick", null)
                     messageText = json.optString("p", "")
 
-                    val newRole = json.optString("role", "NONE")
-                    val newSeats = json.optInt("seats", 0)
-                    val newInfo = json.optString("info", "")
-                    val newLat = if (json.has("lat") && !json.isNull("lat")) json.getDouble("lat") else null
-                    val newLon = if (json.has("lon") && !json.isNull("lon")) json.getDouble("lon") else null
-                    val newDLat = if (json.has("d_lat") && !json.isNull("d_lat")) json.getDouble("d_lat") else null
-                    val newDLon = if (json.has("d_lon") && !json.isNull("d_lon")) json.getDouble("d_lon") else null
+                    // --- Input Validation ---
+                    senderNick = senderNick?.let { MessageValidator.sanitizeString(it, MessageValidator.MAX_NICKNAME_LENGTH) }
+                    messageText = MessageValidator.sanitizeString(messageText, MessageValidator.MAX_CONTENT_LENGTH)
+
+                    val newRole = MessageValidator.sanitizeRole(json.optString("role", "NONE"))
+                    val newSeats = MessageValidator.clampSeats(json.optInt("seats", 0))
+                    val newInfo = MessageValidator.sanitizeString(json.optString("info", ""), MessageValidator.MAX_INFO_LENGTH)
+
+                    val rawLat = if (json.has("lat") && !json.isNull("lat")) json.getDouble("lat") else null
+                    val rawLon = if (json.has("lon") && !json.isNull("lon")) json.getDouble("lon") else null
+                    val rawDLat = if (json.has("d_lat") && !json.isNull("d_lat")) json.getDouble("d_lat") else null
+                    val rawDLon = if (json.has("d_lon") && !json.isNull("d_lon")) json.getDouble("d_lon") else null
+
+                    val loc = MessageValidator.validateCoordinate(rawLat, rawLon)
+                    val dest = MessageValidator.validateCoordinate(rawDLat, rawDLon)
+                    val newLat = loc?.first
+                    val newLon = loc?.second
+                    val newDLat = dest?.first
+                    val newDLon = dest?.second
 
                     val type = json.optString("type", "text")
                     val incomingPubKey = json.optString("p", null)
-                    
+
+                    // Route DHT messages (validated inside DhtManager)
                     if (type == "dht_store") {
                         dhtManager.handleDhtMessage(json)
                         return
@@ -218,8 +231,20 @@ class PeersViewModel(
                         handleUpdateMessage(json)
                         return
                     }
+
+                    // Reject unknown message types
+                    if (!MessageValidator.isKnownMessageType(type)) {
+                        Log.w("PeersViewModel", "Rejected unknown message type: $type")
+                        return
+                    }
                     
                     if (type == "status") messageText = ""
+
+                    // Validate sender onion address
+                    if (!MessageValidator.isValidOnionAddress(senderOnion)) {
+                        Log.w("PeersViewModel", "Rejected message with invalid onion address")
+                        return
+                    }
 
                     val lookupId = OnionUtils.ensureOnionSuffix(senderOnion)
                     val currentPeers = storedPeers.first()
@@ -586,13 +611,23 @@ class PeersViewModel(
 
     private suspend fun handleVouchMessage(json: org.json.JSONObject) {
         val targetPk = json.optString("target", "")
-        val voucherNick = json.optString("v_name", "Unknown")
+        val voucherNick = MessageValidator.sanitizeString(json.optString("v_name", "Unknown"), MessageValidator.MAX_NICKNAME_LENGTH)
         val sig = json.optString("sig", "")
         val timestamp = json.optLong("t", 0)
         val voucherOnion = json.optString("f_onion", "")
         val voucherFullPk = json.optString("p", "")
 
         if (targetPk.isEmpty() || sig.isEmpty() || voucherOnion.isEmpty() || voucherFullPk.isEmpty()) return
+
+        // Validate onion address and timestamp
+        if (!MessageValidator.isValidOnionAddress(voucherOnion)) {
+            Log.w("PeersViewModel", "Vouch rejected: invalid voucher onion")
+            return
+        }
+        if (!MessageValidator.isValidTimestamp(timestamp)) {
+            Log.w("PeersViewModel", "Vouch rejected: invalid timestamp")
+            return
+        }
 
         val dataToVerify = "$targetPk|$timestamp"
         val pubKeyBytes = android.util.Base64.decode(voucherFullPk, android.util.Base64.NO_WRAP)
@@ -653,6 +688,12 @@ class PeersViewModel(
         val url = json.optString("url", "")
         val sig = json.optString("sig", "")
         
+        // Validate URL format
+        if (!MessageValidator.isValidUpdateUrl(url)) {
+            Log.w("PeersViewModel", "Update rejected: invalid URL format")
+            return
+        }
+
         val currentVersion = updateManager.currentVersionCode
 
         if (version > 0 && url.isNotEmpty() && sig.isNotEmpty() && version > currentVersion) {
