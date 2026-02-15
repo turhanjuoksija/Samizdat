@@ -185,17 +185,15 @@ class PeersViewModel(
     // ========== INCOMING MESSAGE HANDLING ==========
 
     private suspend fun handleIncomingMessage(senderIp: String, rawMsg: String) {
-        var senderOnion = senderIp 
-        var messageText = rawMsg
-        var senderNick: String? = null
-
         try {
             if (rawMsg.startsWith("{")) {
                 val json = org.json.JSONObject(rawMsg)
+                
+                // Only process messages with version/format flag "v"
                 if (json.has("v")) {
-                    senderOnion = json.optString("f_onion", senderIp)
-                    senderNick = if (json.isNull("f_nick")) null else json.optString("f_nick", null)
-                    messageText = json.optString("p", "")
+                    val senderOnion = json.optString("f_onion", senderIp)
+                    var senderNick = json.optString("f_nick", "").takeIf { it.isNotEmpty() }
+                    var messageText = json.optString("p", "")
 
                     // --- Input Validation ---
                     senderNick = senderNick?.let { MessageValidator.sanitizeString(it, MessageValidator.MAX_NICKNAME_LENGTH) }
@@ -218,7 +216,8 @@ class PeersViewModel(
                     val newDLon = dest?.second
 
                     val type = json.optString("type", "text")
-                    val incomingPubKey = json.optString("p", null)
+                    // optString returns "" if missing, so we check explicit null or empty
+                    val incomingPubKey = json.optString("p", "").takeIf { it.isNotEmpty() }
 
                     // Route DHT messages (validated inside DhtManager)
                     if (type == "dht_store") {
@@ -297,9 +296,6 @@ class PeersViewModel(
                     } else if (type == "status") {
                          _debugLogs.add(0, "STATUS UPDATE from ${senderNick ?: resolvedPeer?.nickname ?: lookupId}")
                     }
-                } else {
-                    senderOnion = json.optString("f", senderIp)
-                    messageText = json.optString("m", rawMsg)
                 }
             }
         } catch (e: Exception) {

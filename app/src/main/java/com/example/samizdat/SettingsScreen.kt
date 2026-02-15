@@ -32,7 +32,6 @@ fun SettingsScreen(
     myHash: String?
 ) {
     val context = LocalContext.current
-    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),

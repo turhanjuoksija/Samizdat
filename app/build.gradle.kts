@@ -47,6 +47,7 @@ android {
     }
     packaging {
         jniLibs {
+            useLegacyPackaging = true
             pickFirsts += "**/libtor.so"
             pickFirsts += "**/libevent.so"
             pickFirsts += "**/libtorexec.so"
