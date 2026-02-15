@@ -131,7 +131,13 @@ fun ContactsScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
                             value = manualOnion,
-                            onValueChange = { if (it.length <= 60) manualOnion = it },
+                            onValueChange = { input -> 
+                                // FIX: Sanitize paste (remove http://, spaces, etc)
+                                var cleaned = input.trim()
+                                if (cleaned.startsWith("http://")) cleaned = cleaned.removePrefix("http://")
+                                if (cleaned.startsWith("https://")) cleaned = cleaned.removePrefix("https://")
+                                if (cleaned.length <= 60) manualOnion = cleaned 
+                            },
                             label = { Text("Onion Address") },
                             singleLine = true
                         )
@@ -147,9 +153,11 @@ fun ContactsScreen(
                 confirmButton = {
                     Button(
                         onClick = {
-                            if (manualOnion.isNotEmpty() && manualNick.isNotEmpty()) {
-                                viewModel.addManualPeer(manualOnion, manualNick)
-                                android.widget.Toast.makeText(context, "Ping sent to $manualNick!", android.widget.Toast.LENGTH_SHORT).show()
+                            val cleanOnion = manualOnion.trim()
+                            val cleanNick = manualNick.trim()
+                            if (cleanOnion.isNotEmpty() && cleanNick.isNotEmpty()) {
+                                viewModel.addManualPeer(cleanOnion, cleanNick)
+                                android.widget.Toast.makeText(context, "Ping sent to $cleanNick!", android.widget.Toast.LENGTH_SHORT).show()
                                 showAddDialog = false
                             }
                         }

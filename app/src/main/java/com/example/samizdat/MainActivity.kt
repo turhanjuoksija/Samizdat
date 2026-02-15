@@ -141,11 +141,13 @@ class MainActivity : ComponentActivity() {
             Log.e("MainActivity", "Error setting content", e)
         }
         
-        // Listen for incoming messages to show Toasts (Side Effect)
+        // REMOVED: Toasts with raw IP addresses (privacy leak)
+        // Listen for incoming messages to show Toasts (Side Effect) - Only show generic notification if needed
         lifecycleScope.launch {
             try {
-                viewModel.incomingMessages.collect { (senderIp, msg) ->
-                    Toast.makeText(this@MainActivity, "Msg from $senderIp: $msg", Toast.LENGTH_LONG).show()
+                viewModel.incomingMessages.collect { (_, msg) ->
+                    // Optional: Show generic toast or notification here if desired, 
+                    // but removing raw IP display as per review.
                 }
             } catch (e: Exception) {
                  Log.e("MainActivity", "Error collecting messages", e)
@@ -192,10 +194,13 @@ fun MainScreen(
     val savedPeers by viewModel.storedPeers.collectAsState(initial = emptyList())
 
 
-    // QR Code
+    // QR Code - FIX: Use JSONObject for safe escaping
     val qrContent = remember(myNickname, onionAddress, myIp) {
         val onion = onionAddress ?: myIp
-        """{"n":"$myNickname","o":"$onion"}"""
+        JSONObject().apply {
+            put("n", myNickname)
+            put("o", onion)
+        }.toString()
     }
     val qrBitmap = remember(qrContent) { generateQrCode(qrContent) }
 

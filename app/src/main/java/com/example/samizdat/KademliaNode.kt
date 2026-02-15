@@ -2,6 +2,7 @@ package com.example.samizdat
 
 import android.util.Log
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Kademlia DHT Node implementation.
@@ -12,7 +13,7 @@ class KademliaNode(private val myOnionAddress: String) {
     companion object {
         private const val TAG = "KademliaNode"
         private const val K_BUCKET_SIZE = 20 // Standard Kademlia k value
-        private const val HASH_BITS = 160 // SHA-1 produces 160-bit hashes
+        private const val HASH_BITS = 256 // SHA-256 is 256-bit
     }
 
     // My node ID derived from .onion address
@@ -20,10 +21,12 @@ class KademliaNode(private val myOnionAddress: String) {
     val nodeIdHex: String = nodeId.toHexString()
 
     // Known peers: Map from nodeIdHex to onion address
-    private val knownPeers = mutableMapOf<String, String>()
+    // FIX: Thread-safe map
+    private val knownPeers = ConcurrentHashMap<String, String>()
 
     // Local storage: Map from gridIdHash to list of messages
-    private val localStorage = mutableMapOf<String, MutableList<GridMessage>>()
+    // FIX: Thread-safe map
+    private val localStorage = ConcurrentHashMap<String, MutableList<GridMessage>>()
 
     /**
      * Data class for messages stored in the DHT
@@ -48,10 +51,10 @@ class KademliaNode(private val myOnionAddress: String) {
     )
 
     /**
-     * Compute SHA-1 hash of input string
+     * Compute SHA-256 hash of input string
      */
     fun computeHash(input: String): ByteArray {
-        val digest = MessageDigest.getInstance("SHA-1")
+        val digest = MessageDigest.getInstance("SHA-256")
         return digest.digest(input.toByteArray(Charsets.UTF_8))
     }
 

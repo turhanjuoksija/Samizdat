@@ -499,6 +499,7 @@ class PeersViewModel(
                 delay(500) 
                 val payload = getMyStatusPayload()
                 val currentSocksPort = torManager.socksPort.value ?: 9050
+                // Using explicit port now
                 repository.sendMessage(cleanOnion, payload, currentSocksPort)
                 _debugLogs.add(0, "HANDSHAKE: Sent Hello to $localNickname")
             } catch (e: Exception) {
@@ -667,7 +668,8 @@ class PeersViewModel(
             storedPeers.first().forEach { p ->
                 if (!p.onion.isNullOrEmpty()) {
                     try {
-                        repository.sendMessage(p.onion, vouchJson)
+                        val currentSocksPort = torManager.socksPort.value ?: 9050
+                        repository.sendMessage(p.onion, vouchJson, currentSocksPort)
                     } catch (e: Exception) {
                         Log.e("PeersViewModel", "Failed to send vouch to ${p.nickname}")
                     }

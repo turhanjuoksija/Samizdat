@@ -79,6 +79,10 @@ class UpdateManager(
         conn.connectTimeout = 30000
         conn.readTimeout = 60000
         
+        if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+             throw java.io.IOException("Download failed: HTTP ${conn.responseCode}")
+        }
+        
         conn.inputStream.use { input ->
             FileOutputStream(destination).use { output ->
                 input.copyTo(output)

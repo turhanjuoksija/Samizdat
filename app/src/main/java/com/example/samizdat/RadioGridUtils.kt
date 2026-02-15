@@ -25,10 +25,10 @@ object RadioGridUtils {
     }
 
     /**
-     * Convert Grid ID to a SHA-1 hash for DHT operations.
+     * Convert Grid ID to a SHA-256 hash for DHT operations.
      */
     fun getGridHash(gridId: String): ByteArray {
-        val digest = java.security.MessageDigest.getInstance("SHA-1")
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
         return digest.digest(gridId.toByteArray(Charsets.UTF_8))
     }
 
@@ -74,12 +74,12 @@ object RadioGridUtils {
      * Returns Pair(southWest, northEast) corners.
      */
     fun getGridBounds(gridId: String): Pair<GeoPoint, GeoPoint>? {
-        // Parse "RG-latIdx-lonIdx"
-        val parts = gridId.split("-")
-        if (parts.size != 3) return null
+        // Parse "RG-latIdx-lonIdx" handling negative numbers
+        // Regex: capture optional minus, then digits
+        val match = Regex("RG-(-?\\d+)-(-?\\d+)").find(gridId) ?: return null
         
-        val latIdx = parts[1].toIntOrNull() ?: return null
-        val lonIdx = parts[2].toIntOrNull() ?: return null
+        val latIdx = match.groupValues[1].toIntOrNull() ?: return null
+        val lonIdx = match.groupValues[2].toIntOrNull() ?: return null
         
         val latMin = latIdx * BASE_STEP
         val latMax = latMin + BASE_STEP
@@ -100,11 +100,11 @@ object RadioGridUtils {
      */
     fun getNeighborGrids(gridId: String, radius: Int): List<String> {
         if (radius <= 0) return listOf(gridId)
-        val parts = gridId.split("-")
-        if (parts.size != 3) return listOf(gridId)
         
-        val baseLatIdx = parts[1].toIntOrNull() ?: return listOf(gridId)
-        val baseLonIdx = parts[2].toIntOrNull() ?: return listOf(gridId)
+        val match = Regex("RG-(-?\\d+)-(-?\\d+)").find(gridId) ?: return listOf(gridId)
+        
+        val baseLatIdx = match.groupValues[1].toIntOrNull() ?: return listOf(gridId)
+        val baseLonIdx = match.groupValues[2].toIntOrNull() ?: return listOf(gridId)
         
         val neighbors = mutableSetOf<String>()
         for (dl in -radius..radius) {

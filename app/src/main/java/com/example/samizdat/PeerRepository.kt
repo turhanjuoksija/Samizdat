@@ -35,7 +35,7 @@ class PeerRepository(
         return peerDao.getPeerByOnion(onion)
     }
 
-    suspend fun sendMessage(ip: String, message: String, socksPort: Int = 9050) {
+    suspend fun sendMessage(ip: String, message: String, socksPort: Int) {
         // Using fixed port for now
         connectionManager.sendMessage(ip, 12345, message, socksPort)
     }
