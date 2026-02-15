@@ -329,14 +329,16 @@ fun MainScreen(
                                 Toast.makeText(context, "Location Set!", Toast.LENGTH_SHORT).show()
                             } else {
                                 // Unified entry: updateWaypoint handles Role logic (Driver append, Passenger set dest)
-                                viewModel.updateWaypoint(point.latitude, point.longitude) {
+                                val success = viewModel.routeManager.updateWaypoint(point.latitude, point.longitude, viewModel.myRole)
+                                if (!success) {
                                     Toast.makeText(context, "Max 6 stops reached!", Toast.LENGTH_SHORT).show()
                                 }
                                 viewModel.calculateRoute()
                             }
                         },
                         onAddWaypoint = { point ->
-                           viewModel.updateWaypoint(point.latitude, point.longitude) {
+                           val success = viewModel.routeManager.updateWaypoint(point.latitude, point.longitude, viewModel.myRole)
+                           if (!success) {
                                Toast.makeText(context, "Max 6 stops reached!", Toast.LENGTH_SHORT).show()
                            }
                            viewModel.isWaypointMode = false
@@ -355,7 +357,7 @@ fun MainScreen(
                         myRole = viewModel.myRole,
                         mySeats = viewModel.mySeats,
                         isBroadcasting = viewModel.isBroadcasting,
-                        offers = viewModel.gridOffers,
+                        offers = viewModel.dhtManager.gridOffers,
                         onToggleBroadcasting = { 
                             viewModel.isBroadcasting = it
                             if (it) viewModel.broadcastStatus(myNickname)

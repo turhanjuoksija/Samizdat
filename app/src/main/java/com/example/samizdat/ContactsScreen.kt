@@ -131,14 +131,14 @@ fun ContactsScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
                             value = manualOnion,
-                            onValueChange = { newValue: String -> manualOnion = newValue },
+                            onValueChange = { if (it.length <= 60) manualOnion = it },
                             label = { Text("Onion Address") },
                             singleLine = true
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
                             value = manualNick,
-                            onValueChange = { newValue: String -> manualNick = newValue },
+                            onValueChange = { if (it.length <= 50) manualNick = it },
                             label = { Text("Local Nickname") },
                             singleLine = true
                         )

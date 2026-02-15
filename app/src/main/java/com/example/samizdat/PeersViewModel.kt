@@ -90,12 +90,6 @@ class PeersViewModel(
         get() = routeManager.maxWalkingDistanceMeters
         set(value) { routeManager.maxWalkingDistanceMeters = value }
     
-    // ========== DELEGATED PROPERTIES (from DhtManager) ==========
-    
-    val kademliaNode: KademliaNode? get() = dhtManager.kademliaNode
-    val gridMessages get() = dhtManager.gridMessages
-    val gridOffers get() = dhtManager.gridOffers
-    
     // ========== DEBUG LOG ==========
     
     private val _debugLogs = mutableStateListOf<String>()
@@ -557,17 +551,6 @@ class PeersViewModel(
         routeManager.updateLocation(lat, lon)
     }
 
-    fun updateDestination(lat: Double, lon: Double) {
-        routeManager.updateDestination(lat, lon, myRole)
-    }
-
-    fun updateWaypoint(lat: Double, lon: Double, onMaxReached: (() -> Unit)? = null) {
-        val success = routeManager.updateWaypoint(lat, lon, myRole)
-        if (!success) {
-            onMaxReached?.invoke()
-        }
-    }
-
     fun clearAll() {
         routeManager.clearAll()
         isBroadcasting = false
@@ -583,20 +566,8 @@ class PeersViewModel(
 
     // ========== DHT MANAGER DELEGATES ==========
 
-    fun initKademlia(onionAddress: String) {
-        dhtManager.initKademlia(onionAddress)
-    }
-
-    fun sendToGrid(content: String, myNickname: String, targetGridId: String? = null, timestamp: Long = System.currentTimeMillis()) {
-        dhtManager.sendToGrid(content, myNickname, targetGridId, timestamp, routeManager, mySeats)
-    }
-
     fun addDebugOffer() {
         dhtManager.addDebugOffer(myLatitude, myLongitude)
-    }
-
-    fun getGridMessages(targetGridId: String? = null): List<KademliaNode.GridMessage> {
-        return dhtManager.getGridMessages(targetGridId)
     }
 
     fun getFilteredOffers(): List<KademliaNode.GridMessage> {

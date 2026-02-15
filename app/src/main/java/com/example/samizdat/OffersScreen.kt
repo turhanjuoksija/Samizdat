@@ -60,7 +60,7 @@ fun DriverDashboard(viewModel: PeersViewModel) {
 @Composable
 fun PassengerOffers(viewModel: PeersViewModel) {
     val offers = viewModel.getFilteredOffers()
-    val allOffers = viewModel.gridOffers
+    val allOffers = viewModel.dhtManager.gridOffers
     val peers by viewModel.storedPeers.collectAsState(initial = emptyList())
     
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -136,16 +136,17 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     
     // Parse passenger location from message content
-    // Format: "📍 Sijaintini: lat, lon" and "🏁 Määränpääni: lat, lon"
+    // Parse passenger location from message content
+    // Format: "📍 Location: lat, lon" and "🏁 Destination: lat, lon"
     val passengerLocation = remember(msg.content) {
-        val regex = """📍 Sijaintini: ([\d.]+), ([\d.]+)""".toRegex()
+        val regex = """📍 Location: ([\d.]+), ([\d.]+)""".toRegex()
         regex.find(msg.content)?.let { 
             Pair(it.groupValues[1].toDoubleOrNull(), it.groupValues[2].toDoubleOrNull())
         }
     }
     
     val passengerDestination = remember(msg.content) {
-        val regex = """🏁 Määränpääni: ([\d.]+), ([\d.]+)""".toRegex()
+        val regex = """🏁 Destination: ([\d.]+), ([\d.]+)""".toRegex()
         regex.find(msg.content)?.let { 
             Pair(it.groupValues[1].toDoubleOrNull(), it.groupValues[2].toDoubleOrNull())
         }
@@ -180,7 +181,7 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
                             Text("📍", fontSize = 16.sp)
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                "Noukintapaikka: ${String.format("%.4f", passengerLocation.first)}, ${String.format("%.4f", passengerLocation.second)}",
+                                "Pickup: ${String.format("%.4f", passengerLocation.first)}, ${String.format("%.4f", passengerLocation.second)}",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -191,7 +192,7 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
                                 Text("🏁", fontSize = 16.sp)
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    "Määränpää: ${String.format("%.4f", passengerDestination.first)}, ${String.format("%.4f", passengerDestination.second)}",
+                                    "Destination: ${String.format("%.4f", passengerDestination.first)}, ${String.format("%.4f", passengerDestination.second)}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.Gray
                                 )
@@ -244,7 +245,7 @@ fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: Peer
             Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (knownPeer != null) knownPeer.nickname else (offer.senderNickname ?: "Unknown"), 
+                        text = if (knownPeer != null) knownPeer.nickname else offer.senderNickname, 
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium
                     )
@@ -323,7 +324,7 @@ fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: Peer
                 // Route coverage
                 if (offer.routeGrids.isNotEmpty()) {
                     Text(
-                        text = "📍 ${offer.routeGrids.size} ruutua", 
+                        text = "📍 ${offer.routeGrids.size} grids", 
                         style = MaterialTheme.typography.labelSmall, 
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -363,19 +364,19 @@ fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: Peer
                     
                     // Walking distances
                     if (walkToPickup > 0 || walkFromDropoff > 0) {
-                        Text("🚶 Kävely noutopisteelle: ${walkToPickup}m")
-                        Text("🚶 Kävely jättöpaikasta: ${walkFromDropoff}m")
+                        Text("🚶 Walk to pickup: ${walkToPickup}m")
+                        Text("🚶 Walk from dropoff: ${walkFromDropoff}m")
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                     
                     // Available seats
-                    Text("🪑 Vapaita paikkoja: ${offer.availableSeats}")
+                    Text("🪑 Available seats: ${offer.availableSeats}")
                     
                     // Driver location if available
                     if (offer.driverCurrentLat != null && offer.driverCurrentLon != null) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            "📍 Kuskin sijainti saatavilla",
+                            "📍 Driver location available",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.Gray
                         )
@@ -390,13 +391,13 @@ fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: Peer
                     onClick = {
                          // Send ride request message with passenger location
                          val requestMessage = buildString {
-                             append("Hei ${offer.senderNickname}, haluaisin kyydin! 🙋")
+                             append("Hi ${offer.senderNickname}, I'd like a ride! 🙋")
                              // Include passenger location in message
                              if (viewModel.myLatitude != null && viewModel.myLongitude != null) {
-                                 append("\n📍 Sijaintini: ${viewModel.myLatitude}, ${viewModel.myLongitude}")
+                                 append("\n📍 Location: ${viewModel.myLatitude}, ${viewModel.myLongitude}")
                              }
                              if (viewModel.myDestLat != null && viewModel.myDestLon != null) {
-                                 append("\n🏁 Määränpääni: ${viewModel.myDestLat}, ${viewModel.myDestLon}")
+                                 append("\n🏁 Destination: ${viewModel.myDestLat}, ${viewModel.myDestLon}")
                              }
                          }
                          viewModel.sendMessage(
@@ -405,11 +406,11 @@ fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: Peer
                              viewModel.myNickname,
                              type = "ride_request" 
                          )
-                         android.widget.Toast.makeText(context, "Pyyntö lähetetty!", android.widget.Toast.LENGTH_SHORT).show()
+                         android.widget.Toast.makeText(context, "Request sent!", android.widget.Toast.LENGTH_SHORT).show()
                          showDetails = false
                     }
                 ) {
-                    Text("Pyydä kyyti 📨")
+                    Text("Request Ride 📨")
                 }
             },
             dismissButton = {

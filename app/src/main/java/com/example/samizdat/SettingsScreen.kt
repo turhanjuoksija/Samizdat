@@ -64,11 +64,40 @@ fun SettingsScreen(
 
                     OutlinedTextField(
                         value = myNickname,
-                        onValueChange = onNicknameChange,
+                        onValueChange = { if (it.length <= 50) onNicknameChange(it) },
                         label = { Text("Nickname") },
+                        singleLine = true,
+                        maxLines = 1,
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    // Driver Profile Section (Only visible for Drivers)
+                    if (viewModel.myRole == "DRIVER") {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Driver Profile 🚖", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        
+                        OutlinedTextField(
+                            value = viewModel.myInfo,
+                            onValueChange = { if (it.length <= 500) viewModel.myInfo = it },
+                            label = { Text("Vehicle Info (e.g. Toyota Corolla, Pet friendly)") },
+                            minLines = 2,
+                            maxLines = 4,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Available Seats: ${viewModel.mySeats}", style = MaterialTheme.typography.labelMedium)
+                        Slider(
+                            value = viewModel.mySeats.toFloat(),
+                            onValueChange = { viewModel.mySeats = it.toInt() },
+                            valueRange = 1f..8f,
+                            steps = 6,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    
                     if (qrBitmap != null) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Image(

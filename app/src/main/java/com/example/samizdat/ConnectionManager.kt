@@ -60,37 +60,36 @@ class ConnectionManager {
     private suspend fun handleClient(socket: Socket) = withContext(Dispatchers.IO) {
         try {
             socket.soTimeout = SOCKET_TIMEOUT_MS
+            // Use explicit UTF-8 encoding for streams
             val inputStream = socket.getInputStream()
-            val writer = PrintWriter(socket.getOutputStream(), true)
+            val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
+            val writer = PrintWriter(socket.getOutputStream().writer(Charsets.UTF_8), true)
             val senderIp = socket.inetAddress.hostAddress ?: "Unknown"
 
-            // Read messages line by line with size limit
-            val sb = StringBuilder()
-            var ch: Int
-            while (inputStream.read().also { ch = it } != -1) {
-                if (ch == '\n'.code) {
-                    val msg = sb.toString().trimEnd('\r')
-                    sb.clear()
+            // Read messages line by line
+            // BufferedReader handles UTF-8 decoding correctly
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val msg = line?.trim() ?: continue
 
-                    if (msg.isEmpty()) continue
+                if (msg.isEmpty()) continue
 
-                    // Rate limiting check
-                    if (!checkRateLimit(senderIp)) {
-                        Log.w(TAG, "Rate limit exceeded for $senderIp, dropping message")
-                        writer.println("RATE_LIMITED")
-                        continue
-                    }
-
-                    Log.d(TAG, "Received from $senderIp: ${msg.take(200)}${if (msg.length > 200) "..." else ""}")
-                    _incomingMessages.emit(senderIp to msg)
-                    writer.println("OK")
-                } else {
-                    sb.append(ch.toChar())
-                    if (sb.length > MAX_MESSAGE_SIZE) {
-                        Log.w(TAG, "Message from $senderIp exceeded $MAX_MESSAGE_SIZE bytes, dropping connection")
-                        break
-                    }
+                // Check message size limit (approximate, since we already read it into memory)
+                if (msg.length > MAX_MESSAGE_SIZE) {
+                     Log.w(TAG, "Message from $senderIp exceeded length limit, dropping connection")
+                     break
                 }
+
+                // Rate limiting check
+                if (!checkRateLimit(senderIp)) {
+                    Log.w(TAG, "Rate limit exceeded for $senderIp, dropping message")
+                    writer.println("RATE_LIMITED")
+                    continue
+                }
+
+                Log.d(TAG, "Received from $senderIp: ${msg.take(200)}${if (msg.length > 200) "..." else ""}")
+                _incomingMessages.emit(senderIp to msg)
+                writer.println("OK")
             }
             socket.close()
         } catch (e: java.net.SocketTimeoutException) {
@@ -134,8 +133,8 @@ class ConnectionManager {
                 Socket(finalIp, targetPort)
             }
             
-            val writer = PrintWriter(socket.getOutputStream(), true)
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+            val writer = PrintWriter(socket.getOutputStream().writer(Charsets.UTF_8), true)
+            val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
             writer.println(message)
             
             // Wait for ACK
