@@ -8,6 +8,7 @@ import android.util.Log
 import android.net.nsd.NsdServiceInfo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
@@ -100,7 +101,16 @@ class PeersViewModel(
     val storedPeers: Flow<List<Peer>> = repository.storedPeers
     val allVouches: Flow<List<VouchEntity>> = repository.allVouches
     val incomingMessages = repository.incomingMessages
-    val incomingRequests = repository.incomingRequestsForUs
+    
+    // Dismissed request tracking (hides declined requests from Offers page)
+    private val _dismissedRequestIds = mutableStateListOf<Long>()
+    val incomingRequests: Flow<List<ChatMessage>> = repository.incomingRequestsForUs
+        .map { requests: List<ChatMessage> -> requests.filter { msg -> msg.id !in _dismissedRequestIds } }
+    
+    fun dismissRequest(msg: ChatMessage) {
+        _dismissedRequestIds.add(msg.id)
+    }
+    
     val recentConversations = repository.recentConversations
     
     // ========== TOR STATE ==========
@@ -426,22 +436,28 @@ class PeersViewModel(
         viewModelScope.launch {
             val peer = storedPeers.first().find { it.publicKey == requestMsg.peerPublicKey }
             if (peer != null) {
-                sendMessage(
-                    peer = peer,
-                    message = "Kyyti hyväksytty! 🚕 Olen tulossa.",
-                    myNickname = myNickname,
-                    type = "ride_accept"
-                )
-                
-                mySeats = (mySeats - 1).coerceAtLeast(0)
-                _debugLogs.add(0, "Ride accepted. Seats remaining: $mySeats")
-                
-                if (mySeats == 0 && isBroadcasting) {
-                    isBroadcasting = false
-                    _debugLogs.add(0, "BROADCAST STOPPED: No more seats available")
-                }
+                acceptRide(peer)
             } else {
                 _debugLogs.add(0, "ERROR: Peer not found for request")
+            }
+        }
+    }
+
+    fun acceptRide(peer: Peer) {
+        viewModelScope.launch {
+            sendMessage(
+                peer = peer,
+                message = "Kyyti hyväksytty! 🚕 Olen tulossa.",
+                myNickname = myNickname,
+                type = "ride_accept"
+            )
+            
+            mySeats = (mySeats - 1).coerceAtLeast(0)
+            _debugLogs.add(0, "Ride accepted for ${peer.nickname}. Seats remaining: $mySeats")
+            
+            if (mySeats == 0 && isBroadcasting) {
+                isBroadcasting = false
+                _debugLogs.add(0, "BROADCAST STOPPED: No more seats available")
             }
         }
     }
@@ -450,13 +466,19 @@ class PeersViewModel(
          viewModelScope.launch {
             val peer = storedPeers.first().find { it.publicKey == requestMsg.peerPublicKey }
             if (peer != null) {
-                sendMessage(
-                    peer = peer,
-                    message = "Valitettavasti en pääse nyt. 🚫",
-                    myNickname = myNickname,
-                    type = "ride_decline"
-                )
+                declineRide(peer)
             }
+        }
+    }
+
+    fun declineRide(peer: Peer) {
+        viewModelScope.launch {
+             sendMessage(
+                peer = peer,
+                message = "Valitettavasti en pääse nyt. 🚫",
+                myNickname = myNickname,
+                type = "ride_decline"
+            )
         }
     }
 

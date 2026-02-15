@@ -293,8 +293,19 @@ class DhtManager(
     }
 
     /**
+     * Get active offers, deduplicated by sender (one offer per driver).
+     * Keeps the latest offer based on timestamp.
+     */
+    fun getActiveOffers(): List<KademliaNode.GridMessage> {
+        return gridOffers
+            .groupBy { it.senderOnion }
+            .map { (_, messages) -> messages.maxBy { it.timestamp } }
+            .sortedBy { it.timestamp } // Optional: sort by time
+    }
+
+    /**
      * Get filtered offers for Passengers based on their route and walking distance.
-     * Drivers see all offers.
+     * Drivers see all active offers.
      */
     fun getFilteredOffers(
         role: String,
@@ -302,8 +313,10 @@ class DhtManager(
         myDestGridId: String?,
         maxWalkingDistanceMeters: Int
     ): List<KademliaNode.GridMessage> {
-        // Drivers see everything
-        if (role != "PASSENGER") return gridOffers
+        val activeOffers = getActiveOffers()
+        
+        // Drivers see everything (deduplicated)
+        if (role != "PASSENGER") return activeOffers
         
         val myStart = myGridId ?: return emptyList()
         val myDest = myDestGridId ?: return emptyList()
@@ -314,7 +327,7 @@ class DhtManager(
         val startArea = RadioGridUtils.getNeighborGrids(myStart, walkRadius).toSet()
         val destArea = RadioGridUtils.getNeighborGrids(myDest, walkRadius).toSet()
         
-        return gridOffers.filter { offer ->
+        return activeOffers.filter { offer ->
             val routeGridsSet = offer.routeGrids.toSet()
             
             if (routeGridsSet.isEmpty()) {

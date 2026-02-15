@@ -60,7 +60,7 @@ fun DriverDashboard(viewModel: PeersViewModel) {
 @Composable
 fun PassengerOffers(viewModel: PeersViewModel) {
     val offers = viewModel.getFilteredOffers()
-    val allOffers = viewModel.dhtManager.gridOffers
+    val allOffers = viewModel.dhtManager.getActiveOffers()
     val peers by viewModel.storedPeers.collectAsState(initial = emptyList())
     
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -74,10 +74,7 @@ fun PassengerOffers(viewModel: PeersViewModel) {
                 style = MaterialTheme.typography.titleLarge, 
                 fontWeight = FontWeight.Bold
             )
-            // Debug Button (hidden for Driver, but visible here for testing)
-            Button(onClick = { viewModel.addDebugOffer() }) {
-                Text("+ Test")
-            }
+
         }
         
         // Passenger info bar
@@ -134,8 +131,11 @@ fun PassengerOffers(viewModel: PeersViewModel) {
 @Composable
 fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val peers by viewModel.storedPeers.collectAsState(initial = emptyList())
+    val passengerPeer = remember(peers, msg.peerPublicKey) {
+        peers.find { it.publicKey == msg.peerPublicKey }
+    }
     
-    // Parse passenger location from message content
     // Parse passenger location from message content
     // Format: "📍 Location: lat, lon" and "🏁 Destination: lat, lon"
     val passengerLocation = remember(msg.content) {
@@ -151,15 +151,40 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
             Pair(it.groupValues[1].toDoubleOrNull(), it.groupValues[2].toDoubleOrNull())
         }
     }
-    
+
+    val isOnMap = remember(passengerPeer) {
+        passengerPeer != null && passengerPeer.latitude != null && passengerPeer.longitude != null
+    }
+
     Card(
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isOnMap) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.tertiaryContainer
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                Text("New Request! 🔔", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                Column {
+                    Text(
+                        text = if (isOnMap) "Request (On Map) 🗺️" else "New Request! 🔔", 
+                        fontWeight = FontWeight.Bold, 
+                        color = if (isOnMap) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                     if (passengerPeer != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(passengerPeer.nickname, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "★".repeat(minOf(passengerPeer.reputationScore, 5)),
+                                color = Color(0xFFFFD700),
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("(${passengerPeer.reputationScore})", fontSize = 12.sp, color = Color.Gray)
+                        }
+                    }
+                }
                 Text(convertTimestamp(msg.timestamp), style = MaterialTheme.typography.bodySmall)
             }
             Spacer(modifier = Modifier.height(8.dp))
@@ -177,16 +202,44 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("📍", fontSize = 16.sp)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                "Pickup: ${String.format("%.4f", passengerLocation.first)}, ${String.format("%.4f", passengerLocation.second)}",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
-                            )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("📍", fontSize = 16.sp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    "Pickup: ${String.format("%.4f", passengerLocation.first)}, ${String.format("%.4f", passengerLocation.second)}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            // View on Map Button
+                            TextButton(
+                                onClick = {
+                                    if (passengerLocation.first != null && passengerLocation.second != null) {
+                                        viewModel.savePeer(
+                                            lastKnownIp = msg.peerPublicKey, // onion/pubkey as identifier
+                                            nickname = passengerPeer?.nickname ?: "Passenger",
+                                            publicKey = msg.peerPublicKey,
+                                            role = "PASSENGER",
+                                            lat = passengerLocation.first,
+                                            lon = passengerLocation.second,
+                                            dLat = passengerDestination?.first,
+                                            dLon = passengerDestination?.second
+                                        )
+                                        android.widget.Toast.makeText(context, "Location updated on Map 🗺️", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            ) {
+                                Text(if (isOnMap) "Update Map 📍" else "Show Map 🗺️")
+                            }
                         }
+
                         if (passengerDestination != null && passengerDestination.first != null) {
+
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("🏁", fontSize = 16.sp)
@@ -207,6 +260,19 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
                 Button(
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF43A047)),
                     onClick = {
+                        // Also update location on Accept
+                        if (passengerLocation != null && passengerLocation.first != null) {
+                             viewModel.savePeer(
+                                lastKnownIp = msg.peerPublicKey,
+                                nickname = passengerPeer?.nickname ?: "Passenger",
+                                publicKey = msg.peerPublicKey,
+                                role = "PASSENGER",
+                                lat = passengerLocation.first,
+                                lon = passengerLocation.second,
+                                dLat = passengerDestination?.first,
+                                dLon = passengerDestination?.second
+                            )
+                        }
                         viewModel.acceptRideRequest(msg)
                         android.widget.Toast.makeText(context, "Accepted: ${msg.peerPublicKey.take(8)}...", android.widget.Toast.LENGTH_SHORT).show()
                     }
@@ -217,6 +283,7 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red),
                     onClick = {
                          viewModel.declineRideRequest(msg)
+                         viewModel.dismissRequest(msg)
                          android.widget.Toast.makeText(context, "Declined", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 ) {

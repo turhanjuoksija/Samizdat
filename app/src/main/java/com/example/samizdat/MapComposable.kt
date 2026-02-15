@@ -169,10 +169,14 @@ fun MapComposable(
     
     // State to track if we have performed the initial centering
     // State to track if we have performed the initial centering
+    // State to track if we have performed the initial centering
     var hasCentered by remember { mutableStateOf(false) }
     // State for Travel Status Overlay expansion. Auto-expand if no role set.
     // Fixed: Removed (myRole) key so it doesn't auto-reset/collapse when role changes
     var isStatusExpanded by remember { mutableStateOf(myRole == "NONE") }
+    
+    // Peer Selection for Dialog
+    var selectedPeer by remember { mutableStateOf<Peer?>(null) }
 
     val mapView = remember {
         MapView(context).apply {
@@ -335,6 +339,13 @@ fun MapComposable(
                         peerMarker.title = "$roleIconStr ${peer.nickname} $stars\n${peer.role}"
                         peerMarker.snippet = peer.extraInfo
                         peerMarker.icon.mutate().setTint(Color.DKGRAY)
+                        
+                        // Handle marker click to show details/actions
+                        peerMarker.setOnMarkerClickListener { marker, mapView ->
+                            selectedPeer = peer
+                            true // Consume event so InfoWindow doesn't open (we show our own dialog)
+                        }
+                        
                         map.overlays.add(peerMarker)
                         
                         if (peer.destLat != null && peer.destLon != null) {
@@ -349,12 +360,6 @@ fun MapComposable(
                                 destMarker.icon.mutate().setTint(Color.GREEN)
                             }
                             map.overlays.add(destMarker)
-                            
-                            val line = Polyline()
-                            line.setPoints(listOf(peerPos, peerDest))
-                            line.outlinePaint.color = if (peer.role == "DRIVER") Color.RED else Color.GREEN
-                            line.outlinePaint.strokeWidth = 4f
-                            map.overlays.add(line)
                         }
                     }
                 }
@@ -471,15 +476,33 @@ fun MapComposable(
                 
                 // Draw Offer Markers (DHT)
                 offers.forEach { offer ->
-                    RadioGridUtils.getGridCenter(offer.gridId)?.let { center ->
-                        val offerPos = GeoPoint(center.latitude, center.longitude)
+                    val offerPos = if (offer.driverCurrentLat != null && offer.driverCurrentLon != null) {
+                        GeoPoint(offer.driverCurrentLat, offer.driverCurrentLon)
+                    } else {
+                        RadioGridUtils.getGridCenter(offer.gridId)?.let { GeoPoint(it.latitude, it.longitude) }
+                    }
+
+                    if (offerPos != null) {
                         val offerMarker = Marker(map)
                         offerMarker.position = offerPos
-                        offerMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        offerMarker.title = "Offer: ${offer.senderNickname}"
-                        offerMarker.snippet = offer.content
-                        // Green ? icon or dot
-                        offerMarker.icon.mutate().setTint(Color.parseColor("#4CAF50")) 
+                        offerMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        
+                        val isPrecise = offer.driverCurrentLat != null
+                        val iconStr = if (isPrecise) "🚗" else "📡"
+                        
+                        offerMarker.title = "$iconStr Offer: ${offer.senderNickname}"
+                        offerMarker.snippet = "RIDE OFFER: ${offer.senderNickname} (${offer.availableSeats} seats)"
+                        
+                        // Green for Offers
+                        offerMarker.icon.mutate().setTint(Color.parseColor("#4CAF50"))
+                        
+                        // Handle marker click to show details/actions
+                        offerMarker.setOnMarkerClickListener { marker, mapView ->
+                             // Could show dialog here too, but for now standard InfoWindow is fine
+                             marker.showInfoWindow()
+                             true
+                        }
+                        
                         map.overlays.add(offerMarker)
                     }
                 }
@@ -572,11 +595,91 @@ fun MapComposable(
         }
     }
 
+    if (selectedPeer != null) {
+        PeerActionDialog(
+            peer = selectedPeer!!,
+            myRole = myRole,
+            onDismiss = { selectedPeer = null },
+            onAccept = { 
+                viewModel?.acceptRide(it)
+                Toast.makeText(context, "Accepted ${it.nickname}!", Toast.LENGTH_SHORT).show()
+                selectedPeer = null
+            },
+            onDecline = {
+                viewModel?.declineRide(it)
+                Toast.makeText(context, "Declined ${it.nickname}", Toast.LENGTH_SHORT).show()
+                selectedPeer = null
+            }
+        )
+    }
+
     DisposableEffect(Unit) {
         mapView.onResume()
         onDispose { mapView.onPause() }
     }
 }
+
+@Composable
+fun PeerActionDialog(
+    peer: Peer,
+    myRole: String,
+    onDismiss: () -> Unit,
+    onAccept: (Peer) -> Unit,
+    onDecline: (Peer) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { 
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(text = if(peer.role == "DRIVER") "🚗" else "🙋", fontSize = 24.sp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = peer.nickname, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Reputation: ", fontWeight = FontWeight.Bold)
+                    Text("★".repeat(minOf(peer.reputationScore, 5)), color = ComposeColor(0xFFFFD700))
+                    Text(" (${peer.reputationScore})", color = ComposeColor.Gray)
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                if (peer.extraInfo.isNotEmpty()) {
+                    Text("Info: ${peer.extraInfo}")
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                
+                if (myRole == "DRIVER" && peer.role == "PASSENGER") {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Do you want to pick up this passenger?", fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                }
+            }
+        },
+        confirmButton = {
+            if (myRole == "DRIVER" && peer.role == "PASSENGER") {
+                Button(
+                    onClick = { onAccept(peer) },
+                    colors = ButtonDefaults.buttonColors(containerColor = ComposeColor(0xFF43A047))
+                ) {
+                    Text("ACCEPT ✅")
+                }
+            } else {
+                 TextButton(onClick = onDismiss) { Text("OK") }
+            }
+        },
+        dismissButton = {
+            if (myRole == "DRIVER" && peer.role == "PASSENGER") {
+                OutlinedButton(
+                    onClick = { onDecline(peer) },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ComposeColor.Red)
+                ) {
+                    Text("DECLINE ❌")
+                }
+            }
+        }
+    )
+}
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

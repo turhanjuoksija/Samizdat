@@ -309,17 +309,14 @@ fun MainScreen(
 
                     // Waypoints list is accessed directly by MapComposable via ViewModel
                     
-                    // Filter out own onion address to prevent self-display as peer
                     val myOnion = onionAddress
-                    val filteredPeers = savedPeers.filter { peer ->
-                        peer.onion != myOnion && peer.publicKey != myOnion
-                    }
+                    // Filter out own onion address to prevent self-display as peer
+                    // Disabled for testing: Show ALL peers, including self (for 1-device testing)
+                    val filteredPeers = savedPeers 
 
                     MapComposable(
-                        modifier = Modifier.fillMaxSize(),
                         myLocation = myLoc,
                         myDestination = myDest,
-                        // myWaypoint arg removed
                         peers = filteredPeers,
                         isWaypointMode = viewModel.isWaypointMode,
                         onMapLongClick = { point ->
@@ -357,7 +354,7 @@ fun MainScreen(
                         myRole = viewModel.myRole,
                         mySeats = viewModel.mySeats,
                         isBroadcasting = viewModel.isBroadcasting,
-                        offers = viewModel.dhtManager.gridOffers,
+                        offers = viewModel.dhtManager.getActiveOffers().filter { it.senderOnion != myOnion },
                         onToggleBroadcasting = { 
                             viewModel.isBroadcasting = it
                             if (it) viewModel.broadcastStatus(myNickname)
