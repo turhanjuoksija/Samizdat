@@ -38,8 +38,8 @@ class DhtManager(
     private val _gridOffers = mutableStateListOf<KademliaNode.GridMessage>()
     val gridOffers: List<KademliaNode.GridMessage> = _gridOffers
     
-    // Listening radius for DHT sync (number of neighbor grids)
-    var listeningRadius by mutableIntStateOf(1)
+    // Auto-derived listening radius from walking distance (set by PeersViewModel)
+    var getListeningRadius: () -> Int = { 1 }
     
     // Callback to get current route grids from RouteManager
     var getRouteGrids: () -> List<String> = { emptyList() }
@@ -70,16 +70,16 @@ class DhtManager(
                 val currentGridId = getCurrentGridId()
                 val baseGrids = (routeGrids + listOfNotNull(currentGridId)).distinct()
                 
-                val interestGrids = if (listeningRadius > 0) {
+                val interestGrids = if (getListeningRadius() > 0) {
                     baseGrids.flatMap { grid -> 
-                        RadioGridUtils.getNeighborGrids(grid, listeningRadius) 
+                        RadioGridUtils.getNeighborGrids(grid, getListeningRadius()) 
                     }.distinct()
                 } else {
                     baseGrids
                 }
                 
                 if (interestGrids.isNotEmpty()) {
-                    onDebugLog("DHT SYNC: Fetching ${interestGrids.size} grids (Radius: $listeningRadius)")
+                    onDebugLog("DHT SYNC: Fetching ${interestGrids.size} grids (Radius: ${getListeningRadius()})")
                     interestGrids.forEach { gridId ->
                         val messages = node.getLocalMessages(gridId)
                         messages.forEach { msg ->

@@ -95,9 +95,6 @@ class PeersViewModel(
     val kademliaNode: KademliaNode? get() = dhtManager.kademliaNode
     val gridMessages get() = dhtManager.gridMessages
     val gridOffers get() = dhtManager.gridOffers
-    var listeningRadius: Int
-        get() = dhtManager.listeningRadius
-        set(value) { dhtManager.listeningRadius = value }
     
     // ========== DEBUG LOG ==========
     
@@ -141,6 +138,13 @@ class PeersViewModel(
         dhtManager.getRouteGrids = { routeManager.routeGrids }
         dhtManager.getCurrentGridId = { routeManager.myGridId }
         dhtManager.getStoredPeers = { storedPeers.first() }
+        dhtManager.getListeningRadius = {
+            if (myRole == "PASSENGER") {
+                kotlin.math.ceil(maxWalkingDistanceMeters / 500.0).toInt().coerceIn(1, 5)
+            } else {
+                1 // Drivers/NONE: 1 neighbor ring around route
+            }
+        }
         
         // Background collection of incoming messages for persistence
         viewModelScope.launch {

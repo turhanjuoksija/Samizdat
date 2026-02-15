@@ -78,62 +78,9 @@ fun SettingsScreen(
                             modifier = Modifier.size(150.dp)
                         )
                     }
-                }
-            }
-        }
-
-
-
-        // Reputation & WoT Section
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFE6E6FA))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Reputation & WoT", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
                     
-                    val allVouches by viewModel.allVouches.collectAsState(initial = emptyList())
-                    val myOnion = onionAddress ?: ""
-                    val currentMyHash = myHash ?: ""
-                    // Self-vouches or manual vouches might use Onion as PK, while others might use Hash/FullPK
-                    val vouchesIReceived = allVouches.filter { it.targetPk == currentMyHash || (myOnion.isNotEmpty() && it.targetPk == myOnion) }.size
-                    val vouchesIGave = allVouches.filter { it.voucherPk == myOnion }.size
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Received", style = MaterialTheme.typography.labelSmall)
-                            Text("★ $vouchesIReceived", style = MaterialTheme.typography.headlineMedium, color = Color(0xFFFFD700))
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Given", style = MaterialTheme.typography.labelSmall)
-                            Text("🤝 $vouchesIGave", style = MaterialTheme.typography.headlineMedium, color = Color(0xFF6A5ACD))
-                        }
-                    }
-                    Text("Reputation is calculated locally based on trust vouches collected from the network.", fontSize = 10.sp, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-                }
-            }
-        }
-
-        // Discovery & Network Section
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Discovery & Network", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    Text("Listening Radius: ${viewModel.listeningRadius} (~${viewModel.listeningRadius * 2}km)", style = MaterialTheme.typography.labelSmall)
-                    Slider(
-                        value = viewModel.listeningRadius.toFloat(),
-                        onValueChange = { viewModel.listeningRadius = it.toInt() },
-                        valueRange = 0f..5f,
-                        steps = 4
-                    )
-                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Divider()
                     Spacer(modifier = Modifier.height(8.dp))
                     
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -157,7 +104,38 @@ fun SettingsScreen(
             }
         }
 
-        // Discovery & Debug
+        // Reputation & WoT Section
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFE6E6FA))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Reputation & WoT", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    val allVouches by viewModel.allVouches.collectAsState(initial = emptyList())
+                    val myOnion = onionAddress ?: ""
+                    val currentMyHash = myHash ?: ""
+                    val vouchesIReceived = allVouches.filter { it.targetPk == currentMyHash || (myOnion.isNotEmpty() && it.targetPk == myOnion) }.size
+                    val vouchesIGave = allVouches.filter { it.voucherPk == myOnion }.size
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Received", style = MaterialTheme.typography.labelSmall)
+                            Text("★ $vouchesIReceived", style = MaterialTheme.typography.headlineMedium, color = Color(0xFFFFD700))
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Given", style = MaterialTheme.typography.labelSmall)
+                            Text("🤝 $vouchesIGave", style = MaterialTheme.typography.headlineMedium, color = Color(0xFF6A5ACD))
+                        }
+                    }
+                    Text("Reputation is calculated locally based on trust vouches collected from the network.", fontSize = 10.sp, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                }
+            }
+        }
+
+        // Debug Logs
         item {
             Card(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
