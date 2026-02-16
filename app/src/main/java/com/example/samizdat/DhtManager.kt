@@ -360,24 +360,37 @@ class DhtManager(
             return Pair(0, 0)
         }
         
-        // Find closest point on driver's route to passenger's start
+        // Find closest point INDICES on driver's route
         var minPickupDist = Float.MAX_VALUE
-        offer.routePoints.forEach { (lat, lon) ->
+        var pickupIndex = -1
+        
+        offer.routePoints.forEachIndexed { index, (lat, lon) ->
             val results = FloatArray(1)
             android.location.Location.distanceBetween(startLat, startLon, lat, lon, results)
             if (results[0] < minPickupDist) {
                 minPickupDist = results[0]
+                pickupIndex = index
             }
         }
         
         // Find closest point on driver's route to passenger's destination
         var minDropoffDist = Float.MAX_VALUE
-        offer.routePoints.forEach { (lat, lon) ->
+        var dropoffIndex = -1
+        
+        offer.routePoints.forEachIndexed { index, (lat, lon) ->
             val results = FloatArray(1)
             android.location.Location.distanceBetween(destLat, destLon, lat, lon, results)
             if (results[0] < minDropoffDist) {
                 minDropoffDist = results[0]
+                dropoffIndex = index
             }
+        }
+
+        // FIX: Route Directionality Check
+        // If the closest pickup point comes AFTER the closest dropoff point,
+        // the driver is going the wrong way relative to the passenger.
+        if (pickupIndex != -1 && dropoffIndex != -1 && pickupIndex >= dropoffIndex) {
+            return Pair(-1, -1) // Invalid direction
         }
         
         return Pair(minPickupDist.toInt(), minDropoffDist.toInt())

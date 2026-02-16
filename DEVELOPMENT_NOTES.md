@@ -1,5 +1,10 @@
 # Samizdat Development & Versioning Notes 🛡️
 
+## 🚨 Pending Verification (Requires 2-Device Testing) 📱📱
+- [ ] **Map Visuals**: Confirm that passengers see "Car 🚗" icons for real-time driver locations and "Signal 📡" for grid-based offers.
+- [ ] **Map Interactions**: Confirm that the "Accept ✅ / Decline ❌" dialog appears correctly on the map for passengers and triggers the correct flow.
+- [ ] **Offer Deduplication**: Confirm that only one offer appears per driver on the map/list (latest wins).
+
 Tämä tiedosto sisältää kriittisiä huomioita projektin riippuvuuksista ja pakkausasetuksista. Lue tämä ennen kuin päivität kirjastoja tai muutat Gradle-asetuksia!
 
 ## 1. Tor & Native Libraries (Packaging) 📦

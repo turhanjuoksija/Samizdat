@@ -121,7 +121,12 @@ fun PassengerOffers(viewModel: PeersViewModel) {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(offers) { offer ->
                     val knownPeer = peers.find { it.publicKey == offer.senderOnion || it.onion == offer.senderOnion }
-                    OfferCard(offer, knownPeer, viewModel)
+                    // FIX: Check for invalid direction (walk == -1)
+                    val (walkToPickup, _) = viewModel.calculateWalkDistances(offer)
+                    
+                    if (walkToPickup != -1) {
+                         OfferCard(offer, knownPeer, viewModel)
+                    }
                 }
             }
         }
