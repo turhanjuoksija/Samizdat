@@ -338,7 +338,21 @@ fun MapComposable(
                         val stars = "★".repeat(minOf(peer.reputationScore, 5))
                         peerMarker.title = "$roleIconStr ${peer.nickname} $stars\n${peer.role}"
                         peerMarker.snippet = peer.extraInfo
-                        peerMarker.icon.mutate().setTint(Color.DKGRAY)
+
+                        // Use teardrop markers with letters for passengers, icons for drivers
+                        val letter = viewModel?.getRequestLetter(peer.publicKey)
+                        val markerBitmap = if (peer.role == "PASSENGER" && letter != null) {
+                            createTeardropMarkerBitmap(letter, Color.BLACK, Color.parseColor("#FFD600"), Color.BLACK)
+                        } else if (peer.role == "DRIVER") {
+                            createTeardropMarkerBitmap("🚗", Color.BLACK, Color.parseColor("#00BCD4"), Color.BLACK)
+                        } else {
+                            null
+                        }
+                        if (markerBitmap != null) {
+                            peerMarker.icon = BitmapDrawable(context.resources, markerBitmap)
+                        } else {
+                            peerMarker.icon.mutate().setTint(Color.DKGRAY)
+                        }
                         
                         // Handle marker click to show details/actions
                         peerMarker.setOnMarkerClickListener { marker, mapView ->

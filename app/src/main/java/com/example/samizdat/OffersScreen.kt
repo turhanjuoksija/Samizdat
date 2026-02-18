@@ -30,6 +30,11 @@ fun OffersScreen(viewModel: PeersViewModel) {
 fun DriverDashboard(viewModel: PeersViewModel) {
     val requests by viewModel.incomingRequests.collectAsState(initial = emptyList())
     
+    // Update letter assignments whenever request list changes
+    LaunchedEffect(requests) {
+        viewModel.updateRequestLetters(requests)
+    }
+    
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text(
             text = "Driver Dashboard 🚖", 
@@ -49,8 +54,10 @@ fun DriverDashboard(viewModel: PeersViewModel) {
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(requests) { msg ->
-                    RequestCard(msg, viewModel)
+                items(requests.size) { index ->
+                    val msg = requests[index]
+                    val letter = ('A' + index).toString()
+                    RequestCard(msg, viewModel, letter)
                 }
             }
         }
@@ -134,7 +141,7 @@ fun PassengerOffers(viewModel: PeersViewModel) {
 }
 
 @Composable
-fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
+fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel, letter: String = "?") {
     val context = androidx.compose.ui.platform.LocalContext.current
     val peers by viewModel.storedPeers.collectAsState(initial = emptyList())
     val passengerPeer = remember(peers, msg.peerPublicKey) {
@@ -160,11 +167,16 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
     val isOnMap = remember(passengerPeer) {
         passengerPeer != null && passengerPeer.latitude != null && passengerPeer.longitude != null
     }
+    val isAccepted = viewModel.isRequestAccepted(msg.id)
+    val isMapped = viewModel.isRequestMapped(msg.id)
 
     Card(
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isOnMap) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.tertiaryContainer
+            containerColor = if (isAccepted) Color(0xFFE8F5E9)
+                else if (isMapped) Color(0xFFE3F2FD) // Light Blue for "viewed on map"
+                else if (isOnMap) MaterialTheme.colorScheme.secondaryContainer
+                else MaterialTheme.colorScheme.tertiaryContainer
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -172,9 +184,11 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
             Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                 Column {
                     Text(
-                        text = if (isOnMap) "Request (On Map) 🗺️" else "New Request! 🔔", 
+                        text = if (isAccepted) "$letter — Accepted ✅" else "$letter — Ride Request 🔔", 
                         fontWeight = FontWeight.Bold, 
-                        color = if (isOnMap) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onTertiaryContainer
+                        color = if (isAccepted) Color(0xFF2E7D32)
+                            else if (isOnMap) MaterialTheme.colorScheme.onSecondaryContainer
+                            else MaterialTheme.colorScheme.onTertiaryContainer
                     )
                      if (passengerPeer != null) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -198,101 +212,94 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel) {
             val mainMessage = msg.content.lines().firstOrNull() ?: msg.content
             Text(mainMessage, style = MaterialTheme.typography.bodyLarge)
             
-            // Show passenger location if available
-            if (passengerLocation != null && passengerLocation.first != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Surface(
-                    shape = MaterialTheme.shapes.small,
-                    color = Color(0xFFE8F5E9),
-                    modifier = Modifier.fillMaxWidth()
+            Spacer(modifier = Modifier.height(16.dp))
+            if (isAccepted) {
+                // Accepted state: only show Cancel button
+                Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red),
+                        onClick = {
+                             viewModel.declineRideRequest(msg)
+                             viewModel.dismissRequest(msg)
+                             android.widget.Toast.makeText(context, "Cancelled", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    ) {
+                        Text("CANCEL ❌")
+                    }
+                }
+            } else {
+                // Normal state: Map + Accept + Decline buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("📍", fontSize = 16.sp)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    "Pickup: ${String.format("%.4f", passengerLocation.first)}, ${String.format("%.4f", passengerLocation.second)}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            // View on Map Button
-                            TextButton(
-                                onClick = {
-                                    if (passengerLocation.first != null && passengerLocation.second != null) {
-                                        viewModel.savePeer(
-                                            lastKnownIp = msg.peerPublicKey, // onion/pubkey as identifier
-                                            nickname = passengerPeer?.nickname ?: "Passenger",
-                                            publicKey = msg.peerPublicKey,
-                                            role = "PASSENGER",
-                                            lat = passengerLocation.first,
-                                            lon = passengerLocation.second,
-                                            dLat = passengerDestination?.first,
-                                            dLon = passengerDestination?.second
-                                        )
-                                        android.widget.Toast.makeText(context, "Location updated on Map 🗺️", android.widget.Toast.LENGTH_SHORT).show()
+                    // MAP BUTTON (Icon only, toggles state)
+                    if (passengerLocation != null && passengerLocation.first != null) {
+                        OutlinedButton(
+                            onClick = {
+                                if (passengerLocation.first != null && passengerLocation.second != null) {
+                                    viewModel.savePeer(
+                                        lastKnownIp = msg.peerPublicKey,
+                                        nickname = passengerPeer?.nickname ?: "Passenger",
+                                        publicKey = msg.peerPublicKey,
+                                        role = "PASSENGER",
+                                        lat = passengerLocation.first,
+                                        lon = passengerLocation.second,
+                                        dLat = passengerDestination?.first,
+                                        dLon = passengerDestination?.second
+                                    )
+                                    viewModel.toggleRequestMapped(msg.id)
+                                    if (!isMapped) {
+                                         android.widget.Toast.makeText(context, "Shown on Map 🗺️", android.widget.Toast.LENGTH_SHORT).show()
                                     }
                                 }
-                            ) {
-                                Text(if (isOnMap) "Update Map 📍" else "Show Map 🗺️")
-                            }
+                            },
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.width(48.dp) // Square-ish
+                        ) {
+                            Text("🗺️", fontSize = 20.sp)
                         }
-
-                        if (passengerDestination != null && passengerDestination.first != null) {
-
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("🏁", fontSize = 16.sp)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    "Destination: ${String.format("%.4f", passengerDestination.first)}, ${String.format("%.4f", passengerDestination.second)}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.Gray
+                    }
+                    
+                    // ACCEPT BUTTON (Main action, takes remaining width)
+                    Button(
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF43A047)),
+                        onClick = {
+                            // Also update location on Accept
+                            if (passengerLocation != null && passengerLocation.first != null) {
+                                 viewModel.savePeer(
+                                    lastKnownIp = msg.peerPublicKey,
+                                    nickname = passengerPeer?.nickname ?: "Passenger",
+                                    publicKey = msg.peerPublicKey,
+                                    role = "PASSENGER",
+                                    lat = passengerLocation.first,
+                                    lon = passengerLocation.second,
+                                    dLat = passengerDestination?.first,
+                                    dLon = passengerDestination?.second
                                 )
                             }
-                        }
+                            viewModel.acceptRideRequest(msg)
+                            android.widget.Toast.makeText(context, "Accepted: ${msg.peerPublicKey.take(8)}...", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("ACCEPT ✅", maxLines = 1)
                     }
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                Button(
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF43A047)),
-                    onClick = {
-                        // Also update location on Accept
-                        if (passengerLocation != null && passengerLocation.first != null) {
-                             viewModel.savePeer(
-                                lastKnownIp = msg.peerPublicKey,
-                                nickname = passengerPeer?.nickname ?: "Passenger",
-                                publicKey = msg.peerPublicKey,
-                                role = "PASSENGER",
-                                lat = passengerLocation.first,
-                                lon = passengerLocation.second,
-                                dLat = passengerDestination?.first,
-                                dLon = passengerDestination?.second
-                            )
-                        }
-                        viewModel.acceptRideRequest(msg)
-                        android.widget.Toast.makeText(context, "Accepted: ${msg.peerPublicKey.take(8)}...", android.widget.Toast.LENGTH_SHORT).show()
+
+                    // DECLINE BUTTON (Icon only)
+                    OutlinedButton(
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red),
+                        onClick = {
+                             viewModel.declineRideRequest(msg)
+                             viewModel.dismissRequest(msg)
+                             android.widget.Toast.makeText(context, "Declined", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier.width(48.dp) // Square-ish
+                    ) {
+                        Text("❌", fontSize = 20.sp)
                     }
-                ) {
-                    Text("ACCEPT ✅")
-                }
-                OutlinedButton(
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red),
-                    onClick = {
-                         viewModel.declineRideRequest(msg)
-                         viewModel.dismissRequest(msg)
-                         android.widget.Toast.makeText(context, "Declined", android.widget.Toast.LENGTH_SHORT).show()
-                    }
-                ) {
-                    Text("DECLINE ❌")
                 }
             }
         }

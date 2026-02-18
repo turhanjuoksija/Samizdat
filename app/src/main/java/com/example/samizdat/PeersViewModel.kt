@@ -7,8 +7,9 @@ import androidx.lifecycle.viewModelScope
 import android.util.Log
 import android.net.nsd.NsdServiceInfo
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
@@ -101,14 +102,48 @@ class PeersViewModel(
     val storedPeers: Flow<List<Peer>> = repository.storedPeers
     val allVouches: Flow<List<VouchEntity>> = repository.allVouches
     val incomingMessages = repository.incomingMessages
-    
-    // Dismissed request tracking (hides declined requests from Offers page)
-    private val _dismissedRequestIds = mutableStateListOf<Long>()
-    val incomingRequests: Flow<List<ChatMessage>> = repository.incomingRequestsForUs
-        .map { requests: List<ChatMessage> -> requests.filter { msg -> msg.id !in _dismissedRequestIds } }
+    // Dismissed, accepted & mapped request tracking
+    private val _dismissedRequestIds = MutableStateFlow<Set<Long>>(emptySet())
+    private val _acceptedRequestIds = MutableStateFlow<Set<Long>>(emptySet())
+    private val _mappedRequestIds = MutableStateFlow<Set<Long>>(emptySet()) // Requests user has clicked "Map" on
+
+    val incomingRequests: Flow<List<ChatMessage>> = combine(
+        repository.incomingRequestsForUs,
+        _dismissedRequestIds
+    ) { requests, dismissed ->
+        requests.filter { msg -> msg.id !in dismissed }
+            .sortedByDescending { it.timestamp }
+            .distinctBy { it.peerPublicKey } // One request per onion
+    }
+
+    // Letter assignments for linking list cards to map markers (A, B, C...)
+    private val _requestLetters = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    fun updateRequestLetters(requests: List<ChatMessage>) {
+        val newMap = mutableMapOf<String, String>()
+        requests.forEachIndexed { index, msg ->
+            val letter = ('A' + index).toString()
+            newMap[msg.peerPublicKey] = letter
+        }
+        _requestLetters.value = newMap
+    }
+
+    fun getRequestLetter(publicKey: String): String? = _requestLetters.value[publicKey]
     
     fun dismissRequest(msg: ChatMessage) {
-        _dismissedRequestIds.add(msg.id)
+        _dismissedRequestIds.value = _dismissedRequestIds.value + msg.id
+    }
+
+    fun isRequestAccepted(msgId: Long): Boolean = msgId in _acceptedRequestIds.value
+    fun isRequestMapped(msgId: Long): Boolean = msgId in _mappedRequestIds.value
+
+    fun toggleRequestMapped(msgId: Long) {
+        val current = _mappedRequestIds.value
+        if (msgId in current) {
+            _mappedRequestIds.value = current - msgId
+        } else {
+            _mappedRequestIds.value = current + msgId
+        }
     }
     
     val recentConversations = repository.recentConversations
@@ -437,6 +472,7 @@ class PeersViewModel(
             val peer = storedPeers.first().find { it.publicKey == requestMsg.peerPublicKey }
             if (peer != null) {
                 acceptRide(peer)
+                _acceptedRequestIds.value = _acceptedRequestIds.value + requestMsg.id
             } else {
                 _debugLogs.add(0, "ERROR: Peer not found for request")
             }

@@ -97,3 +97,12 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 
 https://github.com/turhanjuoksija/Samizdat
 https://github.com/turhanjuoksija/Samizdat/releases
+
+## 14. UI/UX Design Principles & Markers - 18.2.2026 🎨
+- **Kieli**: Käyttöliittymän kieli on aina **Englanti** (English). Ei suomenkielisiä tekstejä UI-komponenteissa.
+- **Deduplication (Requests & Offers)**: Samalta Onion-osoitteelta näytetään vain **uusin** viesti (oli kyseessä kyytipyyntö kuljettajalle tai kyytitarjous matkustajalle).
+- **Visual Linking (A, B, C...)**: Kyytipyynnöt numeroidaan kirjaimin listan otsikossa (`A — Ride Request`) ja kartalla (`Teardrop A`) yhteyden luomiseksi.
+- **Karttamarkkerien Värikoodit (Teardrop-tyyli)**:
+    - **Passenger**: Keltainen (`#FFD600`) pisara. Sisällä kirjain (A, B...) tai `🙋` jos rooli on pelkkä 'PASSENGER' ilman aktiivista pyyntöä.
+    - **Driver**: Syaani (`#00BCD4`) pisara. Sisällä auto `🚗`.
+- **Offers Tab**: "Show on Map" -nappi (`[ 🗺️ ]`) toimii on/off-kytkimenä. Raakaa koordinaattidataa (lat/lon luvut) ei näytetä korteissa, vain "Pickup location available" -indikaattori.
