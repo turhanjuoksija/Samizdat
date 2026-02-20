@@ -8,6 +8,7 @@ class PeerRepository(
     private val peerDao: PeerDao,
     private val messageDao: MessageDao,
     private val vouchDao: VouchDao,
+    private val rideIntentDao: RideIntentDao,
     private val connectionManager: ConnectionManager
 ) {
     val storedPeers: Flow<List<Peer>> = peerDao.getAllPeers()
@@ -53,6 +54,27 @@ class PeerRepository(
 
     suspend fun updateMessage(message: ChatMessage) {
         messageDao.updateMessage(message)
+    }
+
+    // Ride Intent Operations
+    // private val rideIntentDao = ... (injected)
+
+    val activeRideIntents: Flow<List<RideIntent>> = rideIntentDao.getAllActiveIntents()
+
+    suspend fun getActiveIntentCount(): Int {
+        return rideIntentDao.getActiveIntentCount()
+    }
+
+    suspend fun saveRideIntent(intent: RideIntent): Long {
+        return rideIntentDao.insertIntent(intent)
+    }
+
+    suspend fun deleteRideIntent(intent: RideIntent) {
+        rideIntentDao.deleteIntent(intent)
+    }
+
+    suspend fun expireOldIntents() {
+        rideIntentDao.expireOldIntents(System.currentTimeMillis())
     }
 
     // Start listening for incoming messages

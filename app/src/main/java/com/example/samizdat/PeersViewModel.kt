@@ -65,6 +65,7 @@ class PeersViewModel(
                 routeManager.clearAll()
                 isBroadcasting = false
                 routeManager.syncRoleBasedRoute()
+                activeRidePeers.clear()
             }
         }
     
@@ -75,6 +76,11 @@ class PeersViewModel(
     var isBroadcasting by mutableStateOf(false)
     var isSetLocationMode by mutableStateOf(false)
     var isWaypointMode by mutableStateOf(false)
+    val activeRidePeers = mutableStateListOf<String>()
+    
+    // ========== PASSENGER PICKUP FLOW STATE ==========
+    var reviewingOffer by mutableStateOf<KademliaNode.GridMessage?>(null)
+    var reviewingPickupIndex by mutableIntStateOf(-1)
     
     // ========== DELEGATED PROPERTIES (from RouteManager) ==========
     
@@ -219,6 +225,39 @@ class PeersViewModel(
                 delay(30000) // every 30 seconds
             }
         }
+
+        // Live Location / High-Frequency Tracking Loop (Accepted Rides)
+        viewModelScope.launch {
+            while (true) {
+                if (activeRidePeers.isNotEmpty() && myLatitude != null && myLongitude != null) {
+                    val payload = org.json.JSONObject().apply {
+                        put("v", 1)
+                        put("f_onion", torManager.onionAddress.value ?: "unknown")
+                        put("f_nick", myNickname)
+                        put("lat", myLatitude)
+                        put("lon", myLongitude)
+                        put("t", System.currentTimeMillis())
+                        put("type", "live_location")
+                    }.toString()
+                    
+                    val currentPeers = storedPeers.first()
+                    activeRidePeers.forEach { peerPk ->
+                        val targetPeer = currentPeers.find { it.publicKey == peerPk }
+                        if (targetPeer != null && !targetPeer.onion.isNullOrEmpty()) {
+                            launch {
+                                try {
+                                    val currentSocksPort = torManager.socksPort.value ?: 9050
+                                    repository.sendMessage(targetPeer.onion, payload, currentSocksPort)
+                                } catch (e: Exception) {
+                                    // ignore fast-loop errors
+                                }
+                            }
+                        }
+                    }
+                }
+                delay(5000) // every 5 seconds
+            }
+        }
     }
 
     // ========== INCOMING MESSAGE HANDLING ==========
@@ -275,12 +314,12 @@ class PeersViewModel(
                     }
 
                     // Reject unknown message types
-                    if (!MessageValidator.isKnownMessageType(type)) {
+                    if (!MessageValidator.isKnownMessageType(type) && type != "live_location") {
                         Log.w("PeersViewModel", "Rejected unknown message type: $type")
                         return
                     }
                     
-                    if (type == "status") messageText = ""
+                    if (type == "status" || type == "live_location") messageText = ""
 
                     // Validate sender onion address
                     if (!MessageValidator.isValidOnionAddress(senderOnion)) {
@@ -332,6 +371,12 @@ class PeersViewModel(
                         ))
                         val logPrefix = if (type == "ride_request") "RIDE REQUEST" else "INBOUND"
                         _debugLogs.add(0, "$logPrefix from ${senderNick ?: resolvedPeer?.nickname ?: finalPk}: $messageText")
+                        
+                        // Auto-start tracking if accepted
+                        if (type == "ride_accept" && !activeRidePeers.contains(finalPk)) {
+                            activeRidePeers.add(finalPk)
+                            _debugLogs.add(0, "Started live tracking with ${senderNick ?: finalPk}")
+                        }
                     } else if (type == "status") {
                          _debugLogs.add(0, "STATUS UPDATE from ${senderNick ?: resolvedPeer?.nickname ?: lookupId}")
                     }
@@ -488,6 +533,10 @@ class PeersViewModel(
                 type = "ride_accept"
             )
             
+            if (!activeRidePeers.contains(peer.publicKey)) {
+                activeRidePeers.add(peer.publicKey)
+            }
+            
             mySeats = (mySeats - 1).coerceAtLeast(0)
             _debugLogs.add(0, "Ride accepted for ${peer.nickname}. Seats remaining: $mySeats")
             
@@ -635,6 +684,53 @@ class PeersViewModel(
 
     fun calculateWalkDistances(offer: KademliaNode.GridMessage): Pair<Int, Int> {
         return dhtManager.calculateWalkDistances(offer, myLatitude, myLongitude, myDestLat, myDestLon)
+    }
+    
+    // Find the closest point index on a route to a given coordinate
+    fun findClosestRouteIndex(lat: Double, lon: Double, routePoints: List<Pair<Double, Double>>): Int {
+        if (routePoints.isEmpty()) return -1
+        var minDistance = Float.MAX_VALUE
+        var closestIndex = -1
+        
+        routePoints.forEachIndexed { index, point ->
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(lat, lon, point.first, point.second, results)
+            if (results[0] < minDistance) {
+                minDistance = results[0]
+                closestIndex = index
+            }
+        }
+        return closestIndex
+    }
+
+    // Estimate driving distance along a route between two coordinates
+    fun calculateDistanceAlongRoute(fromLat: Double, fromLon: Double, toLat: Double, toLon: Double, routePoints: List<Pair<Double, Double>>): Float {
+        if (routePoints.isEmpty()) {
+             // Fallback to straight line
+             val results = FloatArray(1)
+             android.location.Location.distanceBetween(fromLat, fromLon, toLat, toLon, results)
+             return results[0]
+        }
+        
+        val startIndex = findClosestRouteIndex(fromLat, fromLon, routePoints)
+        val endIndex = findClosestRouteIndex(toLat, toLon, routePoints)
+        
+        if (startIndex == -1 || endIndex == -1 || startIndex >= endIndex) {
+            // Invalid, or going backwards
+             val results = FloatArray(1)
+             android.location.Location.distanceBetween(fromLat, fromLon, toLat, toLon, results)
+             return results[0]
+        }
+        
+        var distance = 0f
+        for (i in startIndex until endIndex) {
+            val p1 = routePoints[i]
+            val p2 = routePoints[i+1]
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(p1.first, p1.second, p2.first, p2.second, results)
+            distance += results[0]
+        }
+        return distance
     }
 
     // ========== VOUCH & UPDATE HANDLING ==========

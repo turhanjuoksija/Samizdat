@@ -16,13 +16,13 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 @Composable
-fun OffersScreen(viewModel: PeersViewModel) {
+fun OffersScreen(viewModel: PeersViewModel, onNavigateToMap: () -> Unit = {}) {
     val myRole = viewModel.myRole
     
     if (myRole == "DRIVER") {
         DriverDashboard(viewModel)
     } else {
-        PassengerOffers(viewModel)
+        PassengerOffers(viewModel, onNavigateToMap)
     }
 }
 
@@ -65,7 +65,7 @@ fun DriverDashboard(viewModel: PeersViewModel) {
 }
 
 @Composable
-fun PassengerOffers(viewModel: PeersViewModel) {
+fun PassengerOffers(viewModel: PeersViewModel, onNavigateToMap: () -> Unit) {
     val offers = viewModel.getFilteredOffers()
     val allOffers = viewModel.dhtManager.getActiveOffers()
     val peers by viewModel.storedPeers.collectAsState(initial = emptyList())
@@ -132,7 +132,7 @@ fun PassengerOffers(viewModel: PeersViewModel) {
                     val (walkToPickup, _) = viewModel.calculateWalkDistances(offer)
                     
                     if (walkToPickup != -1) {
-                         OfferCard(offer, knownPeer, viewModel)
+                         OfferCard(offer, knownPeer, viewModel, onNavigateToMap)
                     }
                 }
             }
@@ -211,6 +211,35 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel, letter: String = "?
             // Show message content (first line only, without location data)
             val mainMessage = msg.content.lines().firstOrNull() ?: msg.content
             Text(mainMessage, style = MaterialTheme.typography.bodyLarge)
+            
+            // ETA Calculation for Driver
+            if (!isAccepted && passengerLocation != null && passengerLocation.first != null && passengerLocation.second != null) {
+                val driverLat = viewModel.myLatitude
+                val driverLon = viewModel.myLongitude
+                val currentRoute = viewModel.roadRoute
+                
+                if (driverLat != null && driverLon != null && currentRoute != null) {
+                    val distanceMeters = viewModel.calculateDistanceAlongRoute(
+                        driverLat, driverLon, 
+                        passengerLocation.first!!, passengerLocation.second!!,
+                        currentRoute.map { Pair(it.latitude, it.longitude) }
+                    )
+                    
+                    val km = distanceMeters / 1000f
+                    val mins = (distanceMeters / 500f).toInt() // rough 30km/h estimate in city
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(shape = MaterialTheme.shapes.small, color = Color(0xFFFFF3E0)) {
+                        Text(
+                            text = "⏱️ Pickup is ~%.1f km away (~%d mins)".format(km, mins),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFE65100)
+                        )
+                    }
+                }
+            }
             
             Spacer(modifier = Modifier.height(16.dp))
             if (isAccepted) {
@@ -307,7 +336,7 @@ fun RequestCard(msg: ChatMessage, viewModel: PeersViewModel, letter: String = "?
 }
 
 @Composable
-fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: PeersViewModel) {
+fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: PeersViewModel, onNavigateToMap: () -> Unit) {
     var showDetails by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     
@@ -461,6 +490,7 @@ fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: Peer
                         )
                     }
                     
+                    // Removed text inputs and just show map button
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("Message: ${offer.content}")
                 }
@@ -468,32 +498,23 @@ fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: Peer
             confirmButton = {
                 Button(
                     onClick = {
-                         // Send ride request message with passenger location
-                         val requestMessage = buildString {
-                             append("Hi ${offer.senderNickname}, I'd like a ride! 🙋")
-                             // Include passenger location in message
-                             if (viewModel.myLatitude != null && viewModel.myLongitude != null) {
-                                 append("\n📍 Location: ${viewModel.myLatitude}, ${viewModel.myLongitude}")
-                             }
-                             if (viewModel.myDestLat != null && viewModel.myDestLon != null) {
-                                 append("\n🏁 Destination: ${viewModel.myDestLat}, ${viewModel.myDestLon}")
-                             }
-                         }
-                         viewModel.sendMessage(
-                             Peer(offer.senderOnion, offer.senderNickname, offer.senderOnion, isTrusted=true, lastSeenTimestamp=System.currentTimeMillis()), 
-                             requestMessage, 
-                             viewModel.myNickname,
-                             type = "ride_request" 
-                         )
-                         android.widget.Toast.makeText(context, "Request sent!", android.widget.Toast.LENGTH_SHORT).show()
-                         showDetails = false
+                        // Switch to map selection mode
+                        viewModel.reviewingOffer = offer
+                        val startIndex = viewModel.findClosestRouteIndex(
+                             viewModel.myLatitude ?: 0.0, 
+                             viewModel.myLongitude ?: 0.0, 
+                             offer.routePoints
+                        )
+                        viewModel.reviewingPickupIndex = if (startIndex != -1) startIndex else 0
+                        showDetails = false
+                        onNavigateToMap()
                     }
                 ) {
-                    Text("Request Ride 📨")
+                    Text("📍 Select Pickup on Map")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDetails = false }) { Text("Close") }
+                TextButton(onClick = { showDetails = false }) { Text("Cancel") }
             }
         )
     }

@@ -11,6 +11,8 @@ A decentralized, serverless ride-sharing application for Android via Tor and Kad
 ## Features
 - **Tor Anonymity**: All traffic routed through Tor Hidden Services (v3 Onion addresses). No central servers.
 - **Decentralized Matching**: Ride offers are stored and retrieved using a Kademlia Distributed Hash Table (DHT).
+- **Future Ride Scheduling**: Plan rides up to a week ahead. Drivers and passengers can post departure times, discover each other, and start chatting before the trip.
+- **Reputation (Vouches)**: Trust is built peer-to-peer. Vouch for reliable drivers/passengers — vouch counts are visible on ride offers.
 - **Persistent Identity**: Your device is your server. No account creation required.
 - **Bootstrap via QR**: Scan a friend's **Onion Address** QR code to join the network.
 
@@ -39,11 +41,12 @@ A decentralized, serverless ride-sharing application for Android via Tor and Kad
 - [x] Kademlia DHT for peer discovery and ride offer storage.
 - [x] Ride offer creation and acceptance.
 - [x] Ride tracking on map.
-- [x] Ride completion and rating.
+- [x] Reputation system (Vouch-based, local calculation).
+- [x] Future ride scheduling (up to 1 week, max 5 active intents).
 - [ ] Secure software updates through the network.
-- [ ] Reputation system.
 - [ ] Geocast message system.
 - [ ] Notification system.
+- [ ] Chat-Ride linking (connect chat threads to specific ride offers).
 
 **Note on Payments:** Samizdat is free software. There will be no centralized payment system.
 

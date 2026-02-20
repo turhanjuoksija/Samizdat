@@ -47,7 +47,11 @@ class KademliaNode(private val myOnionAddress: String) {
         val destLon: Double? = null,
         val availableSeats: Int = 0,
         val driverCurrentLat: Double? = null, // Kuskin NYKYINEN sijainti
-        val driverCurrentLon: Double? = null
+        val driverCurrentLon: Double? = null,
+        
+        // Future / Scheduled Ride support
+        val departureTime: Long? = null, // Epoch millis (null = now/live)
+        val flexibleTimeWindow: Long? = null // Tolerance in millis
     )
 
     /**
@@ -133,10 +137,15 @@ class KademliaNode(private val myOnionAddress: String) {
 
     /**
      * Store a message locally (for grids we are responsible for)
+     * Deduplicates by removing any older messages from the same sender.
      */
     fun storeLocally(message: GridMessage) {
         val gridHashHex = getGridHash(message.gridId).toHexString()
         val messages = localStorage.getOrPut(gridHashHex) { mutableListOf() }
+        
+        // Remove older messages from the same sender in this grid
+        messages.removeAll { it.senderOnion == message.senderOnion && it.timestamp <= message.timestamp }
+        
         messages.add(message)
         Log.d(TAG, "Stored message for grid ${message.gridId} (total: ${messages.size})")
     }

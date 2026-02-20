@@ -66,6 +66,7 @@ import com.example.samizdat.PeersViewModelFactory
 class MainActivity : ComponentActivity() {
 
     private lateinit var viewModel: PeersViewModel
+    private lateinit var futureRidesViewModel: FutureRidesViewModel
     
     // Identity State
     private var myPublicKeyHash by mutableStateOf<String?>(null)
@@ -80,11 +81,14 @@ class MainActivity : ComponentActivity() {
         val db = AppDatabase.getDatabase(context)
         val torManager = SamizdatTorManager(application)
         val connectionManager = ConnectionManager()
-        val repository = PeerRepository(db.peerDao(), db.messageDao(), db.vouchDao(), connectionManager)
+        val repository = PeerRepository(db.peerDao(), db.messageDao(), db.vouchDao(), db.rideIntentDao(), connectionManager)
         val updateManager = UpdateManager(application, torManager)
         
         val factory = PeersViewModelFactory(repository, torManager, updateManager)
         viewModel = ViewModelProvider(this, factory)[PeersViewModel::class.java]
+
+        val futureFactory = FutureRidesViewModelFactory(repository, viewModel)
+        futureRidesViewModel = ViewModelProvider(this, futureFactory)[FutureRidesViewModel::class.java]
 
         // Load saved nickname
         val prefs = getSharedPreferences("samizdat_prefs", Context.MODE_PRIVATE)
@@ -132,7 +136,8 @@ class MainActivity : ComponentActivity() {
                             onNicknameChange = { newNick ->
                                 myNickname = newNick
                                 prefs.edit().putString("nickname", newNick).apply()
-                            }
+                            },
+                            futureRidesViewModel = futureRidesViewModel
                         )
                     }
                 }
@@ -161,8 +166,9 @@ class MainActivity : ComponentActivity() {
 enum class SamizdatTab(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     CONTACTS("Contacts", Icons.Default.People),
     MAP("Map", Icons.Default.Map),
-    OFFERS("Offers", Icons.Default.LocalOffer),
-    MESSAGES("Messages", Icons.Default.Forum),
+    OFFERS("Live", Icons.Default.LocalOffer),
+    FUTURE("Future", Icons.Default.Event),
+    MESSAGES("Chat", Icons.Default.Forum),
     SETTINGS("Settings", Icons.Default.Settings)
 }
 
@@ -176,7 +182,8 @@ fun MainScreen(
     myNickname: String,
     torStatus: String,
     onionAddress: String?,
-    onNicknameChange: (String) -> Unit
+    onNicknameChange: (String) -> Unit,
+    futureRidesViewModel: FutureRidesViewModel
 ) {
     LaunchedEffect(myFullPubKey) {
         viewModel.myFullPubKey = myFullPubKey
@@ -239,20 +246,56 @@ fun MainScreen(
         }
     }
 
+    var locationPermissionGranted by remember { 
+        mutableStateOf(
+            ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
-            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                val locationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
-                locationClient.getCurrentLocation(com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, null)
-                    .addOnSuccessListener { loc -> loc?.let { viewModel.updateLocation(it.latitude, it.longitude) } }
-            }
+            locationPermissionGranted = true
         }
     }
 
     LaunchedEffect(Unit) {
-        locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+        if (!locationPermissionGranted) {
+            locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+        }
+    }
+
+    DisposableEffect(locationPermissionGranted) {
+        var locationClient: com.google.android.gms.location.FusedLocationProviderClient? = null
+        var locationCallback: com.google.android.gms.location.LocationCallback? = null
+
+        if (locationPermissionGranted) {
+            locationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+            
+            val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
+                com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
+                5000L // 5 seconds interval
+            ).setMinUpdateIntervalMillis(2000L).build()
+
+            locationCallback = object : com.google.android.gms.location.LocationCallback() {
+                override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                    result.lastLocation?.let { loc ->
+                        viewModel.updateLocation(loc.latitude, loc.longitude)
+                    }
+                }
+            }
+
+            try {
+                locationClient.requestLocationUpdates(locationRequest, locationCallback, android.os.Looper.getMainLooper())
+            } catch (e: SecurityException) {
+                Log.e("MainActivity", "Location permission missing", e)
+            }
+        }
+
+        onDispose {
+            locationCallback?.let { locationClient?.removeLocationUpdates(it) }
+        }
     }
 
     if (showMessageDialog != null) {
@@ -367,7 +410,11 @@ fun MainScreen(
                         viewModel = viewModel
                     )
                 }
-                SamizdatTab.OFFERS -> OffersScreen(viewModel = viewModel)
+                SamizdatTab.OFFERS -> OffersScreen(
+                    viewModel = viewModel,
+                    onNavigateToMap = { selectedTab = SamizdatTab.MAP }
+                )
+                SamizdatTab.FUTURE -> FutureRidesScreen(viewModel = futureRidesViewModel, peersViewModel = viewModel)
                 SamizdatTab.MESSAGES -> MessagesScreen(viewModel = viewModel, myNickname = myNickname)
                 SamizdatTab.SETTINGS -> SettingsScreen(
                     viewModel = viewModel,

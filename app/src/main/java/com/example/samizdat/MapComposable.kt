@@ -1,6 +1,7 @@
 package com.example.samizdat
 
 import android.graphics.drawable.Drawable
+import android.util.Log
 import android.preference.PreferenceManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -186,6 +187,10 @@ fun MapComposable(
             controller.setZoom(15.0)
         }
     }
+    
+    // Track markers for reuse (avoids creating new Marker objects each frame)
+    val peerMarkers = remember { mutableMapOf<String, Marker>() }
+    val myMarkerObj = remember { Marker(mapView).apply { position = GeoPoint(0.0, 0.0) } }
 
     // Fixed: Added myRole as key so the listener captures the UPDATED role value
     val eventsOverlay = remember(myRole) {
@@ -222,53 +227,96 @@ fun MapComposable(
             factory = { mapView },
             modifier = Modifier.fillMaxSize(),
             update = { map ->
+              try {
                 map.overlays.clear()
                 map.overlays.add(0, eventsOverlay) // Add at 0 to be below markers
 
+                // --- PICKUP SELECTION MODE ---
+                val activeOffer = viewModel?.reviewingOffer
+                if (activeOffer != null) {
+                     // 1. Draw Driver's Route
+                     if (activeOffer.routePoints.isNotEmpty()) {
+                          val line = Polyline()
+                          val routeGeoPoints = activeOffer.routePoints.map { GeoPoint(it.first, it.second) }
+                          line.setPoints(routeGeoPoints)
+                          line.outlinePaint.color = Color.MAGENTA
+                          line.outlinePaint.strokeWidth = 8f
+                          map.overlays.add(line)
+                          
+                          val pickupIdx = viewModel.reviewingPickupIndex
+                          if (pickupIdx in activeOffer.routePoints.indices) {
+                              val pLat = activeOffer.routePoints[pickupIdx].first
+                              val pLon = activeOffer.routePoints[pickupIdx].second
+                              val pickupGeo = GeoPoint(pLat, pLon)
+                              
+                              val pickupMarker = Marker(map)
+                              pickupMarker.position = pickupGeo
+                              pickupMarker.title = "📍 Selected Pickup"
+                              pickupMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                              
+                              val pickupBitmap = createTeardropMarkerBitmap("📍", Color.BLACK, Color.YELLOW, Color.BLACK)
+                              pickupMarker.icon = BitmapDrawable(context.resources, pickupBitmap)
+                              map.overlays.add(pickupMarker)
+                              
+                              if (!hasCentered) {
+                                  map.controller.setCenter(pickupGeo)
+                                  map.controller.setZoom(15.0)
+                                  hasCentered = true
+                              }
+                          }
+                     }
+                     
+                     if (myLocation != null) {
+                         val myMarker = Marker(map)
+                         myMarker.position = myLocation
+                         myMarker.title = "You are here"
+                         myMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                         val myBitmap = createTeardropMarkerBitmap("🙋", Color.BLACK, Color.GRAY, Color.BLACK, sizeDp = 40)
+                         myMarker.icon = BitmapDrawable(context.resources, myBitmap)
+                         map.overlays.add(myMarker)
+                     }
+                     
+                     map.invalidate()
+                     return@AndroidView
+                }
+
+                // --- NORMAL MAP MODE ---
+                
                 // Marker for "Me"
                 if (myLocation != null) {
-                    val myMarker = Marker(map)
-                    myMarker.position = myLocation
-                    myMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    
-                    // Custom emoji-based icon for start position
-                    // Custom emoji-based icon for start position
+                    myMarkerObj.position = myLocation
+                    myMarkerObj.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+
                     val startEmoji = when (myRole) {
                         "DRIVER" -> "🚗"
                         "PASSENGER" -> "🙋"
                         else -> "🏠"
                     }
-                    myMarker.title = "Start"
+                    myMarkerObj.title = "Start"
                     
-                    // Create custom teardrop icon (Black Outer, Green Inner)
                     val startBitmap = createTeardropMarkerBitmap(
                         text = startEmoji, 
                         outerColor = Color.BLACK, 
-                        innerColor = Color.GREEN // User requested uniform style
+                        innerColor = Color.GREEN
                     )
-                    myMarker.icon = BitmapDrawable(context.resources, startBitmap)
-                    myMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    myMarkerObj.icon = BitmapDrawable(context.resources, startBitmap)
                     
-                    map.overlays.add(myMarker)
+                    map.overlays.add(myMarkerObj)
                     
                     // Destination & Line for Me
                     if (myDestination != null || (viewModel != null && viewModel.myWaypoints.isNotEmpty())) {
-                         // Draw Waypoints with numbered bubbles
                         viewModel?.myWaypoints?.forEachIndexed { index, wp ->
                             val wayMarker = Marker(map)
                             wayMarker.position = wp
                             wayMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                             wayMarker.title = "Stop ${index + 1}"
                             
-                            // Create numbered bubble icon
-                            // Create numbered teardrop icon
                             val numberBitmap = createTeardropMarkerBitmap(
                                 text = "${index + 1}", 
                                 outerColor = Color.BLACK, 
                                 innerColor = Color.GREEN
                             )
                             wayMarker.icon = BitmapDrawable(context.resources, numberBitmap)
-                            // Anchor bottom center because of the teardrop tail
                             wayMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                             
                             map.overlays.add(wayMarker)
@@ -280,7 +328,6 @@ fun MapComposable(
                             destMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                             destMarker.title = "Finish 🏁"
                             
-                            // Use consistent Teardrop style for Destination to avoid overlap/mismatch
                             val destBitmap = createTeardropMarkerBitmap(
                                 text = "🏁", 
                                 outerColor = Color.BLACK, 
@@ -291,7 +338,6 @@ fun MapComposable(
                             map.overlays.add(destMarker)
                         }
                         
-                        // Draw Polyline (Route)
                         if (viewModel?.roadRoute != null) {
                              val line = Polyline()
                              line.setPoints(viewModel.roadRoute)
@@ -299,7 +345,6 @@ fun MapComposable(
                              line.outlinePaint.strokeWidth = 5f
                              map.overlays.add(line)
                         } else if (myRole != "DRIVER") {
-                            // Fallback straight lines ONLY for Passengers (not Drivers)
                             val points = mutableListOf<org.osmdroid.util.GeoPoint>()
                             if (myLocation != null) points.add(myLocation)
                             if (viewModel != null) {
@@ -310,14 +355,12 @@ fun MapComposable(
                             if (points.size > 1) {
                                 val line = Polyline()
                                 line.setPoints(points)
-                                line.outlinePaint.color = Color.CYAN // Cyan for direct line
+                                line.outlinePaint.color = Color.CYAN
                                 line.outlinePaint.strokeWidth = 3f
                                 map.overlays.add(line)
                             }
                         }
                     }
-
-
 
                     // Auto-center on first valid location
                     if (!hasCentered) {
@@ -328,18 +371,24 @@ fun MapComposable(
                 }
 
                 // Markers for Peers
+                val currentPeerIds = peers.map { it.publicKey }.toSet()
+                peerMarkers.keys.retainAll(currentPeerIds)
+
                 peers.forEach { peer ->
                     if (peer.latitude != null && peer.longitude != null) {
-                        val peerPos = GeoPoint(peer.latitude, peer.longitude)
-                        val peerMarker = Marker(map)
-                        peerMarker.position = peerPos
-                        peerMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        val newPos = GeoPoint(peer.latitude, peer.longitude)
+                        val peerMarker = peerMarkers.getOrPut(peer.publicKey) {
+                            Marker(map).apply {
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            }
+                        }
+                        peerMarker.position = newPos
+
                         val roleIconStr = if (peer.role == "DRIVER") "🚗" else if (peer.role == "PASSENGER") "🙋" else "👤"
                         val stars = "★".repeat(minOf(peer.reputationScore, 5))
                         peerMarker.title = "$roleIconStr ${peer.nickname} $stars\n${peer.role}"
                         peerMarker.snippet = peer.extraInfo
 
-                        // Use teardrop markers with letters for passengers, icons for drivers
                         val letter = viewModel?.getRequestLetter(peer.publicKey)
                         val markerBitmap = if (peer.role == "PASSENGER" && letter != null) {
                             createTeardropMarkerBitmap(letter, Color.BLACK, Color.parseColor("#FFD600"), Color.BLACK)
@@ -354,10 +403,9 @@ fun MapComposable(
                             peerMarker.icon.mutate().setTint(Color.DKGRAY)
                         }
                         
-                        // Handle marker click to show details/actions
-                        peerMarker.setOnMarkerClickListener { marker, mapView ->
+                        peerMarker.setOnMarkerClickListener { _, _ ->
                             selectedPeer = peer
-                            true // Consume event so InfoWindow doesn't open (we show our own dialog)
+                            true
                         }
                         
                         map.overlays.add(peerMarker)
@@ -378,7 +426,7 @@ fun MapComposable(
                     }
                 }
                 
-                // Draw road route if available (thicker cyan line)
+                // Draw road route if available
                 roadRoute?.let { route ->
                     if (route.size >= 2) {
                         val routeLine = Polyline()
@@ -390,37 +438,23 @@ fun MapComposable(
                 }
                 
                 // Highlight grid cells
-                // Logic:
-                // 1. If we are PASSENGER, we show grids that intersect with our Walking Distance Circle.
-                // 2. Otherwise/Additionally, we show explicitly highlighted grids (e.g. from debug or other logic).
-                
                 val gridsToDraw = mutableSetOf<String>()
                 if (highlightedGrids != null) gridsToDraw.addAll(highlightedGrids)
                 
-                // Passenger "Scanning" Logic
                 if (myRole == "PASSENGER" && myLocation != null) {
                     val radiusMeters = viewModel?.maxWalkingDistanceMeters?.toDouble() ?: 500.0
                     val currentGrid = RadioGridUtils.getGridId(myLocation.latitude, myLocation.longitude)
-                    // Get 3x3 neighbors (radius 1 grid step is ~2km, plenty for <2km walking)
                     val candidates = RadioGridUtils.getNeighborGrids(currentGrid, 1)
                     
                     candidates.forEach { gridId ->
                         RadioGridUtils.getGridBounds(gridId)?.let { (sw, ne) ->
-                            // Check intersection between Grid Rectangle and Walking Circle
-                            // Simple clamp approach to find closest point on rect to circle center
-                            val latMin = sw.latitude
-                            val latMax = ne.latitude
-                            val lonMin = sw.longitude
-                            val lonMax = ne.longitude
-                            
-                            val clampedLat = myLocation.latitude.coerceIn(latMin, latMax)
-                            val clampedLon = myLocation.longitude.coerceIn(lonMin, lonMax)
+                            val clampedLat = myLocation.latitude.coerceIn(sw.latitude, ne.latitude)
+                            val clampedLon = myLocation.longitude.coerceIn(sw.longitude, ne.longitude)
                             
                             val results = FloatArray(1)
                             Location.distanceBetween(myLocation.latitude, myLocation.longitude, clampedLat, clampedLon, results)
-                            val distanceToRect = results[0]
                             
-                            if (distanceToRect <= radiusMeters) {
+                            if (results[0] <= radiusMeters) {
                                 gridsToDraw.add(gridId)
                             }
                         }
@@ -438,9 +472,8 @@ fun MapComposable(
                             GeoPoint(ne.latitude, sw.longitude),
                             GeoPoint(sw.latitude, sw.longitude)
                         )
-                        // Style for "Scanned" grids
                         if (myRole == "PASSENGER") {
-                             polygon.fillPaint.color = Color.argb(20, 0, 0, 255) // Very light blue fill
+                             polygon.fillPaint.color = Color.argb(20, 0, 0, 255)
                              polygon.outlinePaint.color = Color.argb(50, 0, 0, 255)
                              polygon.outlinePaint.strokeWidth = 2f
                         } else {
@@ -463,19 +496,17 @@ fun MapComposable(
                     val radiusMeters = viewModel?.maxWalkingDistanceMeters?.toDouble() ?: 500.0
                     val dashEffect = DashPathEffect(floatArrayOf(20f, 20f), 0f)
                     
-                    // 1. Circle around My Location
                     if (myLocation != null) {
                          val circlePoints = Polygon.pointsAsCircle(myLocation, radiusMeters)
                          val circle = Polygon()
                          circle.points = circlePoints
                          circle.fillPaint.color = Color.TRANSPARENT
-                         circle.outlinePaint.color = Color.BLUE // Dark Blue as requested
+                         circle.outlinePaint.color = Color.BLUE
                          circle.outlinePaint.strokeWidth = 5f
                          circle.outlinePaint.pathEffect = dashEffect
                          map.overlays.add(circle)
                     }
                     
-                    // 2. Circle around Destination
                     if (myDestination != null) {
                          val circlePoints = Polygon.pointsAsCircle(myDestination, radiusMeters)
                          val circle = Polygon()
@@ -507,12 +538,9 @@ fun MapComposable(
                         offerMarker.title = "$iconStr Offer: ${offer.senderNickname}"
                         offerMarker.snippet = "RIDE OFFER: ${offer.senderNickname} (${offer.availableSeats} seats)"
                         
-                        // Green for Offers
                         offerMarker.icon.mutate().setTint(Color.parseColor("#4CAF50"))
                         
-                        // Handle marker click to show details/actions
-                        offerMarker.setOnMarkerClickListener { marker, mapView ->
-                             // Could show dialog here too, but for now standard InfoWindow is fine
+                        offerMarker.setOnMarkerClickListener { marker, _ ->
                              marker.showInfoWindow()
                              true
                         }
@@ -522,41 +550,49 @@ fun MapComposable(
                 }
 
                 map.invalidate()
+              } catch (e: Exception) {
+                  Log.e("MapComposable", "Error in map update", e)
+              }
             }
         )
         
         // --- TOP OVERLAY: Status & Broadcasting ---
-        TransportModeOverlay(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(16.dp)
-                .fillMaxWidth(0.95f),
-            myRole = myRole,
-            mySeats = mySeats,
-            maxWalkingDistance = viewModel?.maxWalkingDistanceMeters ?: 500,
-            isBroadcasting = isBroadcasting,
-            myInfo = viewModel?.myInfo ?: "",
-            myDestination = myDestination,
-            expanded = isStatusExpanded,
-            onExpandedChange = { isStatusExpanded = it },
-            onRoleChange = { viewModel?.myRole = it },
-            onSeatsChange = { viewModel?.mySeats = it },
-            onWalkingDistanceChange = { viewModel?.maxWalkingDistanceMeters = it },
-            onInfoChange = { viewModel?.myInfo = it },
-            onToggleBroadcasting = { 
-                onToggleBroadcasting(it)
-                if (it) isStatusExpanded = false
-            },
-            onBroadcastClick = { viewModel?.broadcastStatus(viewModel.myNickname) }
-        )
+        // Hide during pickup review
+        if (viewModel?.reviewingOffer == null) {
+            TransportModeOverlay(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(16.dp)
+                    .fillMaxWidth(0.95f),
+                myRole = myRole,
+                mySeats = mySeats,
+                maxWalkingDistance = viewModel?.maxWalkingDistanceMeters ?: 500,
+                isBroadcasting = isBroadcasting,
+                myInfo = viewModel?.myInfo ?: "",
+                myDestination = myDestination,
+                expanded = isStatusExpanded,
+                onExpandedChange = { isStatusExpanded = it },
+                onRoleChange = { viewModel?.myRole = it },
+                onSeatsChange = { viewModel?.mySeats = it },
+                onWalkingDistanceChange = { viewModel?.maxWalkingDistanceMeters = it },
+                onInfoChange = { viewModel?.myInfo = it },
+                onToggleBroadcasting = { 
+                    onToggleBroadcasting(it)
+                    if (it) isStatusExpanded = false
+                },
+                onBroadcastClick = { viewModel?.broadcastStatus(viewModel.myNickname) }
+            )
+        }
 
         // Bottom Controls Overlay
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(12.dp)
-        ) {
+        // Hide during pickup review
+        if (viewModel?.reviewingOffer == null) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(12.dp)
+            ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -607,6 +643,112 @@ fun MapComposable(
                 }
             }
         }
+        }
+        
+        // --- BOTTOM PANEL OVERRIDES ---
+        if (viewModel?.reviewingOffer != null) {
+            val offer = viewModel.reviewingOffer!!
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(),
+                color = ComposeColor.White,
+                shadowElevation = 8.dp
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Fine-tune Pickup Location",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Move the 📍 along the driver's route to a safe spot (like a bus stop).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ComposeColor.Gray
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Nudge Backward
+                        FilledTonalButton(
+                            onClick = {
+                                if (viewModel.reviewingPickupIndex > 0) {
+                                    viewModel.reviewingPickupIndex--
+                                }
+                            }
+                        ) {
+                            Text("◀ Nudge", fontSize = 16.sp)
+                        }
+                        
+                        // Nudge Forward
+                        FilledTonalButton(
+                            onClick = {
+                                if (viewModel.reviewingPickupIndex < offer.routePoints.size - 1) {
+                                    viewModel.reviewingPickupIndex++
+                                }
+                            }
+                        ) {
+                            Text("Nudge ▶", fontSize = 16.sp)
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TextButton(
+                            onClick = {
+                                viewModel.reviewingOffer = null
+                                viewModel.reviewingPickupIndex = -1
+                                hasCentered = false // allow re-centering next time
+                            }
+                        ) {
+                            Text("Cancel", color = ComposeColor.Red)
+                        }
+                        
+                        Button(
+                            onClick = {
+                                val pickupIdx = viewModel.reviewingPickupIndex
+                                if (pickupIdx in offer.routePoints.indices) {
+                                    val finalLat = offer.routePoints[pickupIdx].first
+                                    val finalLon = offer.routePoints[pickupIdx].second
+                                    
+                                     val requestMessage = buildString {
+                                         append("Hi ${offer.senderNickname}, I'd like a ride! 🙋")
+                                         append("\n📍 Location: $finalLat, $finalLon")
+                                         if (viewModel.myDestLat != null && viewModel.myDestLon != null) {
+                                             append("\n🏁 Destination: ${viewModel.myDestLat}, ${viewModel.myDestLon}")
+                                         }
+                                     }
+                                     viewModel.sendMessage(
+                                         Peer(offer.senderOnion, offer.senderNickname, offer.senderOnion, isTrusted=true, lastSeenTimestamp=System.currentTimeMillis()), 
+                                         requestMessage, 
+                                         viewModel.myNickname,
+                                         type = "ride_request" 
+                                     )
+                                     Toast.makeText(context, "Ride Request Sent!", Toast.LENGTH_SHORT).show()
+                                     
+                                     // cleanup
+                                     viewModel.reviewingOffer = null
+                                     viewModel.reviewingPickupIndex = -1
+                                     hasCentered = false
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = ComposeColor(0xFF4CAF50))
+                        ) {
+                            Text("Confirm & Request Ride 📨")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if (selectedPeer != null) {
@@ -629,7 +771,9 @@ fun MapComposable(
 
     DisposableEffect(Unit) {
         mapView.onResume()
-        onDispose { mapView.onPause() }
+        onDispose {
+            mapView.onPause()
+        }
     }
 }
 

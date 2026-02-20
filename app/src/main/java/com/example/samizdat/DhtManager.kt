@@ -83,12 +83,15 @@ class DhtManager(
                     interestGrids.forEach { gridId ->
                         val messages = node.getLocalMessages(gridId)
                         messages.forEach { msg ->
-                            val isDuplicate = _gridOffers.any { 
-                                it.timestamp == msg.timestamp && it.senderOnion == msg.senderOnion 
-                            }
-                            if (!isDuplicate) {
+                            // Deduplicate: if we already have an offer from this driver, only update if newer
+                            val latestExisting = _gridOffers.filter { it.senderOnion == msg.senderOnion }.maxByOrNull { it.timestamp }
+                            
+                            if (latestExisting == null || msg.timestamp > latestExisting.timestamp) {
+                                // Remove old offers from this specific driver
+                                _gridOffers.removeAll { it.senderOnion == msg.senderOnion }
+                                
                                 _gridOffers.add(0, msg)
-                                onDebugLog("DHT DISCOVERY: New offer in $gridId")
+                                onDebugLog("DHT DISCOVERY: New/Updated offer in $gridId")
                             }
                         }
                     }
@@ -115,7 +118,9 @@ class DhtManager(
         targetGridId: String?,
         timestamp: Long,
         routeManager: RouteManager,
-        mySeats: Int
+        mySeats: Int,
+        customDepartureTime: Long? = null,
+        customTimeWindow: Long? = null
     ) {
         val gridId = targetGridId ?: getCurrentGridId() ?: return
         val node = kademliaNode ?: return
@@ -125,7 +130,10 @@ class DhtManager(
             Pair(it.latitude, it.longitude) 
         } ?: emptyList()
 
-        val message = KademliaNode.GridMessage(
+
+            
+            // Allow overriding origin/dest for Future Rides (instead of trusting RouteManager's current state)
+            val message = KademliaNode.GridMessage(
             gridId = gridId,
             senderOnion = myOnion,
             senderNickname = myNickname,
@@ -139,7 +147,9 @@ class DhtManager(
             destLon = routeManager.myDestLon,
             availableSeats = mySeats,
             driverCurrentLat = routeManager.myLatitude,
-            driverCurrentLon = routeManager.myLongitude
+            driverCurrentLon = routeManager.myLongitude,
+            departureTime = customDepartureTime,
+            flexibleTimeWindow = customTimeWindow
         )
 
         // Always store locally
@@ -173,6 +183,8 @@ class DhtManager(
                 put("seats", mySeats)
                 put("driver_lat", routeManager.myLatitude)
                 put("driver_lon", routeManager.myLongitude)
+                if (customDepartureTime != null) put("dep_t", customDepartureTime)
+                if (customTimeWindow != null) put("time_win", customTimeWindow)
             }.toString()
 
             val peers = getStoredPeers()
@@ -251,6 +263,8 @@ class DhtManager(
             if (json.has("driver_lon") && !json.isNull("driver_lon")) json.getDouble("driver_lon") else null
         )
         val seats = MessageValidator.clampSeats(json.optInt("seats", 0))
+        val depTime = if (json.has("dep_t")) json.getLong("dep_t") else null
+        val timeWin = if (json.has("time_win")) json.getLong("time_win") else null
 
         val message = KademliaNode.GridMessage(
             gridId = gridId,
@@ -267,15 +281,17 @@ class DhtManager(
             destLon = rawDest?.second,
             availableSeats = seats,
             driverCurrentLat = rawDriver?.first,
-            driverCurrentLon = rawDriver?.second
+            driverCurrentLon = rawDriver?.second,
+            departureTime = depTime,
+            flexibleTimeWindow = timeWin
         )
         
-        // Store if we don't already have it (deduplicate by timestamp+sender)
+        // Store if it's strictly newer than what we have, or if we have nothing from them yet
         val existing = node.getLocalMessages(gridId)
-        val isDuplicate = existing.any { it.timestamp == timestamp && it.senderOnion == senderOnion }
+        val latestFromSender = existing.filter { it.senderOnion == senderOnion }.maxByOrNull { it.timestamp }
         
-        if (!isDuplicate) {
-            node.storeLocally(message)
+        if (latestFromSender == null || timestamp > latestFromSender.timestamp) {
+            node.storeLocally(message) // KademliaNode now removes the older ones for us
             onDebugLog("DHT: Received from $senderNick for $gridId (${routeGrids.size} grids)")
             
             // Add sender as a known peer
@@ -441,5 +457,98 @@ class DhtManager(
         
         _gridOffers.add(0, msg)
         onDebugLog("DEBUG: Added test offer in $gridId with route to $destGridId")
+    }
+
+    /**
+     * Broadcast a RideIntent to the DHT.
+     * This constructs a fake/temporary RouteManager state from the intent's static data
+     * to reuse the existing sendToGrid logic (or we could refactor sendToGrid to not depend on RouteManager).
+     * 
+     * Refactoring sendToGrid is better, but to save time & risk, we'll manually construct the JSON here
+     * or overload sendToGrid.
+     * 
+     * Actually, let's create a dedicated simplified method for Intents since they don't have "current location" updates.
+     */
+    fun publishIntent(intent: RideIntent, myNickname: String) {
+        val node = kademliaNode ?: return
+        val myOnion = getTorOnionAddress() ?: return
+        
+        // Calculate Grid ID from intent origin
+        val gridId = RadioGridUtils.getGridId(intent.originLat, intent.originLon) ?: return
+
+        // Create content string
+        val timeString = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(intent.departureTime))
+        val typeStr = if (intent.type == "OFFER") "RIDE OFFER" else "RIDE REQUEST"
+        val content = "$typeStr: Departure $timeString"
+
+        // For now, intents are point-to-point (no complex route waypoints yet, or we assume straight line)
+        // In future, we might want to calculate the route grids for the intent too.
+        val routeGrids = try {
+            val start = org.osmdroid.util.GeoPoint(intent.originLat, intent.originLon)
+            val end = org.osmdroid.util.GeoPoint(intent.destLat, intent.destLon)
+            // Just start and end grids for now to avoid performing heavy routing in background
+            listOf(RadioGridUtils.getGridId(intent.originLat, intent.originLon), RadioGridUtils.getGridId(intent.destLat, intent.destLon)).filterNotNull()
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+        val message = KademliaNode.GridMessage(
+            gridId = gridId,
+            senderOnion = myOnion,
+            senderNickname = myNickname,
+            content = content,
+            timestamp = System.currentTimeMillis(),
+            ttlSeconds = 86400, // 24 hours TTL for future rides
+            routePoints = listOf(Pair(intent.originLat, intent.originLon), Pair(intent.destLat, intent.destLon)),
+            routeGrids = routeGrids,
+            originLat = intent.originLat,
+            originLon = intent.originLon,
+            destLat = intent.destLat,
+            destLon = intent.destLon,
+            availableSeats = if (intent.type == "OFFER") 3 else 0, // Default seat guess
+            departureTime = intent.departureTime,
+            flexibleTimeWindow = intent.flexibleTimeWindow
+        )
+
+        // Store locally
+        node.storeLocally(message)
+        onDebugLog("DHT: Published Intent for $timeString")
+
+        // Broadcast
+        scope.launch {
+            val dhtJson = JSONObject().apply {
+                put("v", 2)
+                put("type", "dht_store")
+                put("grid_id", gridId)
+                put("sender_onion", myOnion)
+                put("sender_nick", myNickname)
+                put("content", content)
+                put("timestamp", message.timestamp)
+                put("ttl", message.ttlSeconds)
+                // Minimal route points
+                put("route_points", JSONArray().apply {
+                    put(JSONArray().apply { put(intent.originLat); put(intent.originLon) })
+                    put(JSONArray().apply { put(intent.destLat); put(intent.destLon) })
+                })
+                put("route_grids", JSONArray(routeGrids))
+                put("origin_lat", intent.originLat)
+                put("origin_lon", intent.originLon)
+                put("dest_lat", intent.destLat)
+                put("dest_lon", intent.destLon)
+                put("dep_t", intent.departureTime)
+                put("time_win", intent.flexibleTimeWindow)
+            }.toString()
+
+            val peers = getStoredPeers()
+            peers.forEach { peer ->
+                if (!peer.onion.isNullOrEmpty() && peer.onion != myOnion) {
+                    try {
+                        sendMessageToPeer(peer.onion, dhtJson, getTorSocksPort())
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                }
+            }
+        }
     }
 }

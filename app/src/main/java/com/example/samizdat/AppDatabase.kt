@@ -5,11 +5,12 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [Peer::class, ChatMessage::class, VouchEntity::class], version = 12)
+@Database(entities = [Peer::class, ChatMessage::class, VouchEntity::class, RideIntent::class], version = 13)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun peerDao(): PeerDao
     abstract fun messageDao(): MessageDao
     abstract fun vouchDao(): VouchDao
+    abstract fun rideIntentDao(): RideIntentDao
 
     companion object {
         @Volatile

@@ -106,3 +106,15 @@ https://github.com/turhanjuoksija/Samizdat/releases
     - **Passenger**: Keltainen (`#FFD600`) pisara. Sisällä kirjain (A, B...) tai `🙋` jos rooli on pelkkä 'PASSENGER' ilman aktiivista pyyntöä.
     - **Driver**: Syaani (`#00BCD4`) pisara. Sisällä auto `🚗`.
 - **Offers Tab**: "Show on Map" -nappi (`[ 🗺️ ]`) toimii on/off-kytkimenä. Raakaa koordinaattidataa (lat/lon luvut) ei näytetä korteissa, vain "Pickup location available" -indikaattori.
+
+## 15. Future Rides (Scheduling) - 19.2.2026 🗓️
+- **Tietokanta**: `RideIntent` -entiteetti (`ride_intents` -taulu). Kentät: `type` (OFFER/REQUEST), sijainti, `departureTime` (epoch millis), `status` (ACTIVE/EXPIRED/CANCELLED). Tietokannan versio nostettu **13**:een.
+- **GridMessage**: Lisätty `departureTime: Long?` ja `flexibleTimeWindow: Long?`. `null` = live-kyyti, asetettu = tulevaisuuden kyyti.
+- **DHT-protokolla**: Uudet kentät `dep_t` ja `time_win` JSON-viestissä. Vanha protokolla ei ymmärrä näitä — käyttäjän pitää päivittää (fresh install).
+- **Spam-esto**: Max **5 aktiivista** `RideIntent`-ilmoitusta per käyttäjä. Tarkistetaan paikallisesti ennen tallennusta.
+- **TTL**: Tulevien kyytien TTL on 24h. Sovellus **uudelleenjulkaisee** aktiiviset intentit automaattisesti 15 min välein kun sovellus on auki.
+- **Offline-käyttäytyminen**: P2P-verkossa ilmoitus katoaa kun TTL umpeutuu. Jos käyttäjä on offline 3 päivää, ilmoitukset häviävät verkosta. Tämä on hyväksyttävää, koska laite ei voi lähettää viestejä suljettuna.
+- **UI (FutureRidesScreen)**: "My Schedule" (omat ilmoitukset) + "Future Offers on Route" (löydetyt tarjoukset). ❌ dismiss-nappi, 👍 "Interested" -pikanappi, 💬 "Chat" -nappi.
+- **Chat-First periaate**: Tulevaisuuden kyydit ovat "keskustelun aloittajia". Tavoite ei ole automaattinen varaus vaan yhteydenotto kuskin kanssa keskusteluun.
+- **TODO**: Chat-viestien linkittäminen tiettyyn tarjoukseen/matkaan. Nykyään Chat-sivu ei tiedä mihin kyytiin viesti liittyy.
+
