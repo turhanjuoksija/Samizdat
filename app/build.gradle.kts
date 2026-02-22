@@ -83,6 +83,12 @@ dependencies {
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("androidx.compose.material:material-icons-extended")
     
+    // WebSockets (Nostr Relays)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    
+    // Cryptography (Nostr Schnorr Signatures) — MUST use -jni-android, NOT -jvm!
+    implementation("fr.acinq.secp256k1:secp256k1-kmp-jni-android:0.14.0")
+
     // Tor (Kotlin 1.9 Compatible - oldest 2.x version)
     implementation("io.matthewnelson.kmp-tor:runtime:2.0.0")
     implementation("io.matthewnelson.kmp-tor:runtime-service:2.0.0")

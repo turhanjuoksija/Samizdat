@@ -34,8 +34,12 @@ This document contains a design and architecture review of Samizdat from a user'
 1. **Show Driver's Route to Passenger:** When a passenger taps an `OfferCard` (or a green marker on the map), the map should immediately draw that specific driver's exact route (`Polyline`) using the `routePoints` attached to the DHT message.
 2. **Propose a Pickup Point (`📍`)**: The app automatically finds the closest point on the driver's route to the passenger's current GPS location. It places a special "Suggested Pickup" marker there.
 3. **Propose a Dropoff Point (`🏁`)**: It does the same for the passenger's destination along the driver's route.
-4. **Passenger Confirmation:** The passenger looks at the map: *"Okay, the driver is passing through this intersection 400m away. That's a good place to jump on board."* The passenger can drag the `📍` marker along the route to a slightly better spot (like a proper bus stop) if they want, or just accept the suggested one.
-5. **Send Request:** When the passenger clicks "Request Ride", the app sends the exact coordinates of that `📍` (Pickup) and `🏁` (Dropoff) to the driver, NOT just the passenger's current couch location.
+```markdown
+4. **Fine-tuning the Points**: To ensure the pickup and dropoff points stay strictly on the driver's path, the UI should provide `+` and `-` buttons. The passenger can tap these to nudge the `📍` or `🏁` markers forward or backward along the route polyline (e.g., in 50m increments) until they align with a safe spot like a bus stop or known landmark.
+```
+```markdown
+5. **Send Request with Visible Markers**: When the passenger clicks "Request Ride", the app sends the exact coordinates of the selected pickup point to the driver. Use a highly visible "A" or "B" marker on the map for the pickup location (matching the request identifier) to make it immediately clear and distinct. The exact drop-off point does not need to be fine-tuned in the UI, as both parties can reach a consensus on the final stop once they are in the car together.
+```
 
 ## 4. Accepting a Ride (Driver Perspective)
 **Current State:**

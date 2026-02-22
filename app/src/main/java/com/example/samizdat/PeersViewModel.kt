@@ -212,6 +212,18 @@ class PeersViewModel(
             torOnionAddress.collect { onion ->
                 if (onion != null) {
                     dhtManager.initKademlia(onion)
+                    
+                    // Trigger Nostr Bootstrap Discovery if we have no peers
+                    val currentPeers = storedPeers.first()
+                    if (currentPeers.isEmpty()) {
+                        _debugLogs.add(0, "No peers found. Starting Nostr Bootstrap discovery...")
+                        torManager.bootstrapManager.startDiscovery(onion) { discoveredOnions ->
+                            discoveredOnions.forEach { discoveredOnion ->
+                                _debugLogs.add(0, "Nostr discovered peer: $discoveredOnion")
+                                addManualPeer(discoveredOnion, "Nostr Peer")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -731,6 +743,29 @@ class PeersViewModel(
             distance += results[0]
         }
         return distance
+    }
+
+    fun calculateDriverDistanceToPickup(offer: KademliaNode.GridMessage): Int? {
+        val pLat = myLatitude ?: return null
+        val pLon = myLongitude ?: return null
+        val dLat = offer.driverCurrentLat ?: return null
+        val dLon = offer.driverCurrentLon ?: return null
+        
+        // 1. Find pickup point on route
+        if (offer.routePoints.isEmpty()) {
+            // Fallback to straight line if no route
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(dLat, dLon, pLat, pLon, results)
+            return results[0].toInt()
+        }
+        
+        val pickupIndex = findClosestRouteIndex(pLat, pLon, offer.routePoints)
+        if (pickupIndex == -1) return null
+        
+        val pickupPoint = offer.routePoints[pickupIndex]
+        
+        // 2. Calculate distance along route from driver to pickup
+        return calculateDistanceAlongRoute(dLat, dLon, pickupPoint.first, pickupPoint.second, offer.routePoints).toInt()
     }
 
     // ========== VOUCH & UPDATE HANDLING ==========

@@ -43,6 +43,8 @@ class SamizdatTorManager(private val context: Application) {
     private var torRuntime: TorRuntime? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private val keyFile by lazy { File(context.filesDir, "onion_v3_private_key") }
+    
+    val bootstrapManager = NostrBootstrapManager(context)
 
     fun startTor() {
         scope.launch {
@@ -189,6 +191,16 @@ class SamizdatTorManager(private val context: Application) {
 
                 _onionAddress.value = address
                 _statusMessage.value = "Tor: Online at $address"
+                
+                // Publish our newly created Onion address to Nostr so others can find us
+                try {
+                    bootstrapManager.publishOurOnion(address) { status ->
+                        _statusMessage.value = status
+                    }
+                } catch (e: Exception) {
+                    Log.e("Tor", "Nostr Bootstrap failed (non-fatal): ${e.message}", e)
+                    _statusMessage.value = "Tor: Online (Nostr bootstrap skipped)"
+                }
             }
         )
     }

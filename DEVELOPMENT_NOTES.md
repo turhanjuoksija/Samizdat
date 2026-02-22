@@ -118,3 +118,11 @@ https://github.com/turhanjuoksija/Samizdat/releases
 - **Chat-First periaate**: Tulevaisuuden kyydit ovat "keskustelun aloittajia". Tavoite ei ole automaattinen varaus vaan yhteydenotto kuskin kanssa keskusteluun.
 - **TODO**: Chat-viestien linkittäminen tiettyyn tarjoukseen/matkaan. Nykyään Chat-sivu ei tiedä mihin kyytiin viesti liittyy.
 
+## 16. P2P Bootstrapping via Nostr (Sybil-resistant) 🌐 - 22.2.2026
+Sovellus käyttää Tor-verkon `.onion` osoitteita vertaisviestintään, mutta uusien käyttäjien löytäminen (bootstrapping) vaatii ulkopuolisen kerroksen.
+- **Nostr Relays**: Käytämme kaikille avoimia Nostr relay -palvelimia (kuten `wss://relay.damus.io` ja `wss://nos.lol`) julkistaaksemme ja löytääksemme muiden käyttäjien `.onion` osoitteita.
+- **Sybil-suojaus (NIP-13 PoW)**: Nostr on täysin avoin ja kuka tahansa voi luoda loputtomasti feikki-avaimia. Tämän estämiseksi vaadimme kryptografisen Proof-of-Workin (Työtodiste, NIP-13). 
+  - Kun puhelin julkaisee osoitteensa, sen täytyy laskea SHA-256 tiivistettä kunnes saavutetaan *Difficulty 22* (ID:n pitää alkaa ainakin viidellä nollalla ja parilla bitillä). Tämä on tarkoituksella hidasta (kestää useamman minuutin puhelimella), mikä tekee massiivisesta spammaamisesta mahdotonta yhdelle hyökkääjälle.
+  - Vain viestit, joiden PoW-vaatimus täyttyy, hyväksytään muilta.
+- **Tallennetut Tapahtumat ja Expiration (NIP-01 & NIP-40)**: Käytämme Nostr *Replaceable* Kind `10337`.  Nämä tallentuvat Relay-palvelimille. Jotta roskan määrä pysyy kurissa, lisäämme eventtiin NIP-40 `"expiration"` -tagin (7 päivää eteenpäin), jolloin Relay voi siivota sen automaattisesti pois.
+- **Rate-Limiting**: Puhelin julkaisee ja louhii PoW:n vain **kerran 24 tunnissa** (käytämme SharedPreferencesia tämän muistamiseen), paitsi jos `.onion` -osoite muuttuu, jolloin se julkaistaan välittömästi. Samalla oma sipuliosoite suodatetaan pois löydetyistä tuloksista.

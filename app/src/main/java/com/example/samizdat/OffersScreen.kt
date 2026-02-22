@@ -423,6 +423,26 @@ fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: Peer
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
+
+            // Driver ETA info
+            val dDist = viewModel.calculateDriverDistanceToPickup(offer)
+            if (dDist != null) {
+                val km = dDist / 1000f
+                val mins = (dDist / 500f).toInt() // rough 30km/h estimate in city
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = Color(0xFFFFF3E0),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                ) {
+                    Text(
+                        text = "⏱️ Driver is ~%.1f km away (~%d mins)".format(km, mins),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFE65100)
+                    )
+                }
+            }
             
             // Route info
             Text(text = offer.content, style = MaterialTheme.typography.bodyMedium)
@@ -480,8 +500,19 @@ fun OfferCard(offer: KademliaNode.GridMessage, knownPeer: Peer?, viewModel: Peer
                     // Available seats
                     Text("🪑 Available seats: ${offer.availableSeats}")
                     
-                    // Driver location if available
-                    if (offer.driverCurrentLat != null && offer.driverCurrentLon != null) {
+                    // Driver location and ETA if available
+                    val dDistDetail = viewModel.calculateDriverDistanceToPickup(offer)
+                    if (dDistDetail != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        val km = dDistDetail / 1000f
+                        val mins = (dDistDetail / 500f).toInt()
+                        Text(
+                            "⏱️ Driver is ~%.1f km away (~%d mins)".format(km, mins),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFE65100)
+                        )
+                    } else if (offer.driverCurrentLat != null && offer.driverCurrentLon != null) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             "📍 Driver location available",
