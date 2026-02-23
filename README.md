@@ -43,7 +43,7 @@ A decentralized, serverless ride-sharing application for Android via Tor and Kad
 - [x] Ride tracking on map.
 - [x] Reputation system (Vouch-based, local calculation).
 - [x] Future ride scheduling (up to 1 week, max 5 active intents).
-- [ ] Secure software updates through the network.
+- [x] Secure software updates through the network (Nostr + P2P Gossip).
 - [ ] Geocast message system.
 - [ ] Notification system.
 - [ ] Chat-Ride linking (connect chat threads to specific ride offers).
@@ -51,4 +51,4 @@ A decentralized, serverless ride-sharing application for Android via Tor and Kad
 **Note on Payments:** Samizdat is free software. There will be no centralized payment system.
 
 ## Experimental Features
-The codebase contains traces of Wi-Fi (NSD) local discovery. These are currently secondary to the Tor-based implementation.
+- **Nostr Bootstrapping (Sybil-resistant)**: The app uses the Nostr network (Relays + PoW NIP-13) to automatically discover other Tor nodes without needing manual QR sharing.

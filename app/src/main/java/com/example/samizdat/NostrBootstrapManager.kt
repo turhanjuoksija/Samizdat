@@ -281,6 +281,122 @@ class NostrBootstrapManager(private val context: Context) {
         }
     }
 
+    /**
+     * Connects to Nostr relays and subscribes to app update events (Kind 10338)
+     */
+    fun checkForUpdates(currentVersion: Int, onUpdateFound: (Int, String, String) -> Unit) {
+        scope.launch {
+            Log.i(TAG, "Starting Nostr discovery for app updates...")
+
+            // Calculate cutoff time (e.g., look for updates in the last 7 days)
+            val sinceTimestamp = (System.currentTimeMillis() / 1000) - (7 * 24 * 60 * 60)
+
+            // Create NIP-01 Subscription filter for UPDATE events
+            val filter = JSONObject().apply {
+                put("kinds", JSONArray().put(UPDATE_KIND))
+                put("since", sinceTimestamp)
+                put("limit", 10) // We only need the latest few
+            }
+
+            val subId = "samizdat_updates_${System.currentTimeMillis()}"
+            val subscribeMessage = JSONArray().apply {
+                put("REQ")
+                put(subId)
+                put(filter)
+            }.toString()
+
+            for (relayUrl in defaultRelays) {
+                val connected = connectAndSubscribeToUpdates(relayUrl, subscribeMessage, currentVersion, onUpdateFound)
+                if (connected) {
+                    break // Connecting to one relay to fetch broadcasts is usually enough
+                }
+            }
+        }
+    }
+
+    private suspend fun connectAndSubscribeToUpdates(
+        url: String, 
+        subscribeMessage: String, 
+        currentVersion: Int,
+        onUpdateFound: (Int, String, String) -> Unit
+    ): Boolean {
+        var isConnected = false
+        val request = Request.Builder().url(url).build()
+
+        val webSocketListener = object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.d(TAG, "Connected to $url for reading updates")
+                isConnected = true
+                webSocket.send(subscribeMessage)
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                try {
+                    val message = JSONArray(text)
+                    val type = message.getString(0)
+                    
+                    if (type == "EVENT") {
+                        val eventJson = message.getJSONObject(2) // ["EVENT", "subId", {event}]
+                        handleIncomingUpdateEvent(eventJson, currentVersion, onUpdateFound, webSocket)
+                    } else if (type == "EOSE") {
+                        Log.d(TAG, "Reached EOSE for updates on $url")
+                        // Leave the socket open briefly to ensure we process late arrivals, then we could close it.
+                        // For now we'll just let it disconnect naturally or stay open.
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error parsing Nostr update message: $text", e)
+                }
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.w(TAG, "Failed to read updates from $url: ${t.message}")
+                isConnected = false
+            }
+        }
+        
+        client.newWebSocket(request, webSocketListener)
+        delay(1500)
+        return isConnected
+    }
+
+    private fun handleIncomingUpdateEvent(
+        eventJson: JSONObject, 
+        currentVersion: Int, 
+        onUpdateFound: (Int, String, String) -> Unit,
+        webSocket: WebSocket
+    ) {
+        val kind = eventJson.optInt("kind", 0)
+        if (kind != UPDATE_KIND) return
+
+        var version = -1
+        var url = ""
+        var sig = ""
+
+        val tags = eventJson.optJSONArray("tags")
+        if (tags != null) {
+            for (i in 0 until tags.length()) {
+                val tagArray = tags.optJSONArray(i)
+                if (tagArray != null && tagArray.length() >= 2) {
+                    val key = tagArray.getString(0)
+                    val value = tagArray.getString(1)
+                    when (key) {
+                        "samizdat_ver" -> version = value.toIntOrNull() ?: -1
+                        "samizdat_url" -> url = value
+                        "samizdat_sig" -> sig = value
+                    }
+                }
+            }
+        }
+
+        // We only care if it's strictly newer
+        if (version > currentVersion && url.isNotEmpty() && sig.isNotEmpty()) {
+            Log.i(TAG, "Found App Update via Nostr! v$version at $url")
+            onUpdateFound(version, url, sig)
+            // Can close the socket since we found what we wanted
+            webSocket.close(1000, "Update found")
+        }
+    }
+
     companion object {
         private const val TAG = "NostrBootstrap"
         // Target difficulty in bits. 22 = 5 leading hex zeros + 2 bits. Takes ~2-5 min on a phone.
@@ -288,6 +404,8 @@ class NostrBootstrapManager(private val context: Context) {
         // Replaceable event kind for app-specific discovery.
         // 10000-19999 are "Replaceable", meaning relays STORE the latest event per pubkey.
         const val BOOTSTRAP_KIND = 10337
+        // Replaceable event kind for broadcasting App Updates
+        const val UPDATE_KIND = 10338
         // NIP-40: Events expire after 7 days (relays should auto-delete)
         const val EXPIRATION_SECONDS = 7L * 24 * 60 * 60  // 7 days
         // Only re-publish once per 24 hours

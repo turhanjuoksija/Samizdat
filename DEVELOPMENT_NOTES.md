@@ -126,3 +126,16 @@ Sovellus käyttää Tor-verkon `.onion` osoitteita vertaisviestintään, mutta u
   - Vain viestit, joiden PoW-vaatimus täyttyy, hyväksytään muilta.
 - **Tallennetut Tapahtumat ja Expiration (NIP-01 & NIP-40)**: Käytämme Nostr *Replaceable* Kind `10337`.  Nämä tallentuvat Relay-palvelimille. Jotta roskan määrä pysyy kurissa, lisäämme eventtiin NIP-40 `"expiration"` -tagin (7 päivää eteenpäin), jolloin Relay voi siivota sen automaattisesti pois.
 - **Rate-Limiting**: Puhelin julkaisee ja louhii PoW:n vain **kerran 24 tunnissa** (käytämme SharedPreferencesia tämän muistamiseen), paitsi jos `.onion` -osoite muuttuu, jolloin se julkaistaan välittömästi. Samalla oma sipuliosoite suodatetaan pois löydetyistä tuloksista.
+
+## 17. App Update Gossiping (Nostr + P2P) - 23.2.2026 🔄
+Sovelluksen päivitykset levitetään P2P-verkossa ilman erillistä käyttöliittymää (Developer UI) sovelluksessa.
+- **Nostr Initial Broadcast**: Kehittäjä julkaisee uuden APK:n verkkoon tekemällä Nostr-verkon kautta tapahtuman (Kind `10338`). Tapahtuma sisältää tagit `samizdat_ver`, `samizdat_url` ja `samizdat_sig`.
+  - Toisin kuin peer-löydössä, tässä **ei** vaadita PoW-laskentaa, koska luottamus perustuu sovelluksen sisäänrakennettuun kehittäjän julkiseen avaimeen (Signature verification).
+- **P2P Gossip Propagation**: Kun mikä tahansa vertaislaite (peer) lataa ja vahvistaa uuden päivityksen (Signature OK), se tallentaa viestin välimuistiin (`cachedUpdateJson`).
+- **Passive Discovery**: Status-viestit sisältävät nyt uuden kentän: `"app_v"`. Kun laite, jolla on välimuistissa uusi päivitys, ottaa vastaan status-viestin laitteelta jolla on pienempi `"app_v"`, se lähettää päivitysviestin sille automaattisesti.
+- **Workflow**: 
+  1. Build APK
+  2. Hash APK: `sha256sum app-release.apk`
+  3. Sign hash: `echo -n "UPDATE:version:hash" | openssl dgst -sha256 -sign dev_key.pem | base64 -w0`
+  4. Host on a temporary local Tor Hidden Service (Option A).
+  5. Publish Nostr event (Kind 10338) from computer.

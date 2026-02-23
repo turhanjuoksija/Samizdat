@@ -160,6 +160,10 @@ class PeersViewModel(
     val torOnionAddress = torManager.onionAddress
     val isTorBootstrapped = torManager.isBootstrapped
 
+    // ========== APP UPDATE GOSSIP STATE ==========
+    private var cachedUpdateJson: String? = null
+    private var highestGossipedVersion: Int = updateManager.currentVersionCode
+
     // ========== INITIALIZATION ==========
 
     init {
@@ -222,6 +226,14 @@ class PeersViewModel(
                                 _debugLogs.add(0, "Nostr discovered peer: $discoveredOnion")
                                 addManualPeer(discoveredOnion, "Nostr Peer")
                             }
+                        }
+                    }
+
+                    // Always check for App Updates via Nostr in the background
+                    torManager.bootstrapManager.checkForUpdates(updateManager.currentVersionCode) { version, url, sig ->
+                        if (version > highestGossipedVersion) {
+                            _debugLogs.add(0, "NOSTR UPDATE: Initiating gossip for v$version")
+                            broadcastAppUpdate(version, url, sig)
                         }
                     }
                 }
@@ -368,6 +380,26 @@ class PeersViewModel(
                         }
                     } else {
                         savePeer(lookupId, senderNick ?: "Unknown", lookupId, lookupId, newRole, newSeats, newInfo, newLat, newLon, newDLat, newDLon, incomingPubKey)
+                    }
+
+                    // Auto-Gossip App Updates based on peer's reported version
+                    if (type == "status") {
+                        val peerAppVersion = json.optInt("app_v", 0)
+                        val cachedUpdate = cachedUpdateJson
+                        if (peerAppVersion in 1 until updateManager.currentVersionCode && cachedUpdate != null) {
+                            val targetOnion = resolvedPeer?.onion ?: if (OnionUtils.isOnion(lookupId)) lookupId else null
+                            if (targetOnion != null) {
+                                _debugLogs.add(0, "GOSSIP: Pushing update to ${senderNick ?: targetOnion} (they have v$peerAppVersion)")
+                                viewModelScope.launch {
+                                    try {
+                                        val currentSocksPort = torManager.socksPort.value ?: 9050
+                                        repository.sendMessage(targetOnion, cachedUpdate, currentSocksPort)
+                                    } catch (e: Exception) {
+                                        // Ignore send failures
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Save Message
@@ -621,6 +653,7 @@ class PeersViewModel(
             put("t", System.currentTimeMillis())
             put("type", "status")
             put("p", myFullPubKey ?: "") 
+            put("app_v", updateManager.currentVersionCode) // Advertise our version for gossip
         }.toString()
     }
 
@@ -856,19 +889,62 @@ class PeersViewModel(
             return
         }
 
+        if (version <= highestGossipedVersion) {
+            return // Prevent duplicate downloads and infinite gossip loops
+        }
+
+        // Immediately update state so we don't process redundant packets
+        highestGossipedVersion = version
+
         val currentVersion = updateManager.currentVersionCode
 
         if (version > 0 && url.isNotEmpty() && sig.isNotEmpty() && version > currentVersion) {
             _debugLogs.add(0, "UPDATE: v$version available (current: v$currentVersion). Downloading...")
             viewModelScope.launch {
                 try {
+                    // This internally verifies the developer signature
                     updateManager.downloadAndInstall(url, sig, version)
-                    _debugLogs.add(0, "UPDATE: Install Prompted!")
+                    
+                    _debugLogs.add(0, "UPDATE: Install Prompted! Caching payload for gossip.")
+                    
+                    // If we get here, signature matched and download succeeded
+                    cachedUpdateJson = json.toString()
+                    
+                    // Re-broadcast to all our peers
+                    val currentSocksPort = torManager.socksPort.value ?: 9050
+                    val peers = storedPeers.first()
+                    var gossipCount = 0
+                    peers.forEach { peer ->
+                        if (!peer.onion.isNullOrEmpty()) {
+                            launch {
+                                try {
+                                    repository.sendMessage(peer.onion, cachedUpdateJson!!, currentSocksPort)
+                                    gossipCount++
+                                } catch (e: Exception) {
+                                    // Ignore individual peer send failures
+                                }
+                            }
+                        }
+                    }
+                    _debugLogs.add(0, "GOSSIP: Pushed update to $gossipCount peers")
                 } catch (e: Exception) {
                     _debugLogs.add(0, "UPDATE ERROR: ${e.message}")
                 }
             }
         }
+    }
+
+    private fun broadcastAppUpdate(version: Int, url: String, signature: String) {
+        val jsonPayload = org.json.JSONObject().apply {
+            put("v", 1)
+            put("type", "APP_UPDATE")
+            put("ver", version)
+            put("url", url)
+            put("sig", signature)
+        }.toString()
+
+        // Treat our own broadcast just like receiving an update to leverage the same caching/gossip loop
+        handleUpdateMessage(org.json.JSONObject(jsonPayload))
     }
 
     // ========== LIFECYCLE ==========
