@@ -572,7 +572,7 @@ class PeersViewModel(
         viewModelScope.launch {
             sendMessage(
                 peer = peer,
-                message = "Kyyti hyväksytty! 🚕 Olen tulossa.",
+                message = "Ride accepted! 🚕 I'm on my way.",
                 myNickname = myNickname,
                 type = "ride_accept"
             )
@@ -604,7 +604,7 @@ class PeersViewModel(
         viewModelScope.launch {
              sendMessage(
                 peer = peer,
-                message = "Valitettavasti en pääse nyt. 🚫",
+                message = "Unfortunately, I can't make it now. 🚫",
                 myNickname = myNickname,
                 type = "ride_decline"
             )

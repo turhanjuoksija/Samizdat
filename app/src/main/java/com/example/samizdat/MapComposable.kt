@@ -963,7 +963,7 @@ fun TransportModeOverlay(
 
                 if (myRole == "PASSENGER") {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("\uD83D\uDEB6 Max kävelymatka: ${maxWalkingDistance}m")
+                    Text("🚶 Max walking distance: ${maxWalkingDistance}m")
                     Slider(
                         value = maxWalkingDistance.toFloat(),
                         onValueChange = { onWalkingDistanceChange(it.toInt()) },
