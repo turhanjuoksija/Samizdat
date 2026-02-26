@@ -134,8 +134,13 @@ Sovelluksen päivitykset levitetään P2P-verkossa ilman erillistä käyttöliit
 - **P2P Gossip Propagation**: Kun mikä tahansa vertaislaite (peer) lataa ja vahvistaa uuden päivityksen (Signature OK), se tallentaa viestin välimuistiin (`cachedUpdateJson`).
 - **Passive Discovery**: Status-viestit sisältävät nyt uuden kentän: `"app_v"`. Kun laite, jolla on välimuistissa uusi päivitys, ottaa vastaan status-viestin laitteelta jolla on pienempi `"app_v"`, se lähettää päivitysviestin sille automaattisesti.
 - **Workflow**: 
-  1. Build APK
-  2. Hash APK: `sha256sum app-release.apk`
-  3. Sign hash: `echo -n "UPDATE:version:hash" | openssl dgst -sha256 -sign dev_key.pem | base64 -w0`
+  1. Build APK ./gradlew assembleRelease
+  2. Hash APK: `sha256sum app/build/outputs/apk/release/Samizdat-0.4v-alpha.apk`
+  3. Sign hash:
+     ```bash
+     echo -n "UPDATE:26:hash_here" > msg.txt
+     openssl pkeyutl -sign -inkey private.pem -rawin -in msg.txt | base64 -w0
+     rm msg.txt
+     ```
   4. Host on a temporary local Tor Hidden Service (Option A).
   5. Publish Nostr event (Kind 10338) from computer.

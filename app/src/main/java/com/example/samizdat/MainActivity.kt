@@ -541,7 +541,7 @@ fun generateQrCode(text: String): Bitmap? {
 }
 
 suspend fun generateAndHashKey(): Pair<String, String> = withContext(Dispatchers.IO) {
-    val alias = "samizdat_ed25519_key"
+    val alias = "samizdat_rsa_key"
     val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore")
     keyStore.load(null)
 
@@ -579,13 +579,14 @@ suspend fun generateAndHashKey(): Pair<String, String> = withContext(Dispatchers
 }
 
 private fun generateNewKey(alias: String): ByteArray {
-    val kpg: KeyPairGenerator = KeyPairGenerator.getInstance("EC", "AndroidKeyStore")
+    val kpg: KeyPairGenerator = KeyPairGenerator.getInstance("RSA", "AndroidKeyStore")
     val parameterSpec = KeyGenParameterSpec.Builder(
         alias,
         KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
     )
-        .setAlgorithmParameterSpec(ECGenParameterSpec("ed25519"))
-        .setDigests(KeyProperties.DIGEST_NONE)
+        .setDigests(KeyProperties.DIGEST_SHA256)
+        .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
+        .setKeySize(2048)
         .build()
 
     kpg.initialize(parameterSpec)

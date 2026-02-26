@@ -36,3 +36,5 @@ samizdat_dev_key.pub
 
 # Large Media / Assets
 video/
+publish_update.sh
+nak

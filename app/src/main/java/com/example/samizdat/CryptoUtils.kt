@@ -5,9 +5,9 @@ import java.security.KeyStore
 import java.security.Signature
 
 object CryptoUtils {
-    private const val ALIAS = "samizdat_ed25519_key"
+    private const val ALIAS = "samizdat_rsa_key"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
-    private const val SIGN_ALGO = "Ed25519" // Android 12+ standard
+    private const val SIGN_ALGO = "SHA256withRSA" // Universally supported on Android
 
     fun signData(data: String): String? {
         return try {
@@ -29,14 +29,7 @@ object CryptoUtils {
 
     fun verifySignature(data: String, signatureBase64: String, publicKeyEncoded: ByteArray): Boolean {
         return try {
-            // Ed25519 public key bytes can be used to reconstruct the key if they are in X.509 format
-            // However, our publicKeyEncoded is likely X.509 due to Android KeyStore's getEncoded()
-            // Ed25519 is supported via "Ed25519" algorithm in KeyFactory on Android 12+
-            val kf = try {
-                java.security.KeyFactory.getInstance("Ed25519")
-            } catch (e: Exception) {
-                java.security.KeyFactory.getInstance("EdDSA") // Try fallback
-            }
+            val kf = java.security.KeyFactory.getInstance("RSA")
             val pubKey = kf.generatePublic(java.security.spec.X509EncodedKeySpec(publicKeyEncoded))
             
             val s = Signature.getInstance(SIGN_ALGO)
@@ -50,10 +43,10 @@ object CryptoUtils {
         }
     }
     
-    // Hardcoded Developer Public Key (X.509 Encoded Ed25519)
-    // Corresponds to private.pem generated offline.
+    // Hardcoded Developer Public Key (X.509 Encoded RSA)
+    // Corresponds to private_rsa.pem generated offline.
     // Replace this if you rotate keys!
-    private const val DEVELOPER_PUBLIC_KEY = "MCowBQYDK2VwAyEARxOs+xzrg8gzt3f/CykQ0zOPTmb3WHiUJGibETBTwAk="
+    private const val DEVELOPER_PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAgutnS9/+j4KGsVwuZHFdBzjq68vmTnMaYBhNM+3swfWxT3SK4wkY65az6IWZNzJQZPE7ifIFLZGieTt5sXD4mxtd9yXK/A/WQ73W6DeBvNRlKw3xImhxQrbYwWb9V8WTdsMo5/PISrsBeh4cMCmjz1cmPZ2fVCMdbSY7GcgAUJnTAZDFloDjRCLeURAPNIVlhzQBhbjKDE/1ANl3kEsl1uniN8l/xbVzLikKny2AH83gKsmy09mbIDg0ihYsLob8dkedX1RnweWqF4/2ymO0qUX8GzW0jfb/r7t07kG3raNOvbOrfPnWzVlh4Xiatrq/H4z+j2OGl/kMIHNd0roRNQIDAQAB"
 
     // ... (rest of simple sign/verify methods)
 

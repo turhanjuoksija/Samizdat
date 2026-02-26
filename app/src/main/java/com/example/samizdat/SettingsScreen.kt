@@ -45,6 +45,18 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Identity", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    
+                    // Show current app version so user can verify updates
+                    val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                    val versionCode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                        packageInfo.longVersionCode
+                    } else {
+                        @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
+                    }
+                    Text("App v${packageInfo.versionName} (build $versionCode)", 
+                         style = MaterialTheme.typography.bodySmall, 
+                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+                    
                     Spacer(modifier = Modifier.height(8.dp))
                     
                     if (onionAddress != null) {
@@ -197,6 +209,32 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
+
+        // Add version number at the very bottom
+        item {
+            val context = LocalContext.current
+            val versionStr = try {
+                val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    "v${pInfo.longVersionCode}"
+                } else {
+                    @Suppress("DEPRECATION")
+                    "v${pInfo.versionCode}"
+                }
+            } catch (e: Exception) {
+                "Unknown Version"
+            }
+            
+            Text(
+                text = "Samizdat $versionStr",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp),
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
