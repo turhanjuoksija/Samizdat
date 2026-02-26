@@ -76,7 +76,7 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - **Gradle JVM Args**: Android-kehitinympäristössä `kapt` ja `compose` saattavat vaatia enemmän muistia. `gradle.properties` tiedostossa on `org.gradle.jvmargs=-Xmx2048m`, jotta kääntäminen ei kaadu muistiin (OutOfMemoryError).
 
 ---
-*Päivitetty viimeksi: 2026-02-12 (Security Hardening)*
+*Päivitetty viimeksi: 2026-02-27 (OTA Updater & RSA Crypto Fix)*
 
 ## 12. Kartan ja Käyttöliittymän Päivitykset (UI/UX) - 24.1.2026 🗺️
 - **Undo-toiminto**: Korvattu kaksi erillistä poistonappia yhdellä `Undo (↩️)` -painikkeella, joka poistaa viimeisimmän reittipisteen.
@@ -134,13 +134,8 @@ Sovelluksen päivitykset levitetään P2P-verkossa ilman erillistä käyttöliit
 - **P2P Gossip Propagation**: Kun mikä tahansa vertaislaite (peer) lataa ja vahvistaa uuden päivityksen (Signature OK), se tallentaa viestin välimuistiin (`cachedUpdateJson`).
 - **Passive Discovery**: Status-viestit sisältävät nyt uuden kentän: `"app_v"`. Kun laite, jolla on välimuistissa uusi päivitys, ottaa vastaan status-viestin laitteelta jolla on pienempi `"app_v"`, se lähettää päivitysviestin sille automaattisesti.
 - **Workflow**: 
-  1. Build APK ./gradlew assembleRelease
-  2. Hash APK: `sha256sum app/build/outputs/apk/release/Samizdat-0.4v-alpha.apk`
-  3. Sign hash:
-     ```bash
-     echo -n "UPDATE:26:hash_here" > msg.txt
-     openssl pkeyutl -sign -inkey private.pem -rawin -in msg.txt | base64 -w0
-     rm msg.txt
-     ```
-  4. Host on a temporary local Tor Hidden Service (Option A).
-  5. Publish Nostr event (Kind 10338) from computer.
+  1. Increment `versionCode` in `app/build.gradle.kts`.
+  2. Build APK: `./gradlew assembleRelease`
+  3. Run the automated script: `~/projects/samizdat/publish_update.sh` (This script gathers the APK, hashes it, signs the hash with `private_rsa.pem` using SHA256withRSA, publishes the `Kind 10338` event to Nostr, and stages the APK for hosting.)
+  4. Ensure Tor is running and serve the staging directory via Python HTTP server: `cd ~/samizdat_updates/ && python3 -m http.server 8080`.
+  5. **Note on Crypto**: All developer update signatures and internal identity keys run on **SHA256withRSA**, not Ed25519. Android devices running API < 33 (Android 13) do not have native KeyStore support for Ed25519, which caused silent signature validation failures on older devices.

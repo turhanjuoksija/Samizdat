@@ -15,6 +15,7 @@ A decentralized, serverless ride-sharing application for Android via Tor and Kad
 - **Reputation (Vouches)**: Trust is built peer-to-peer. Vouch for reliable drivers/passengers — vouch counts are visible on ride offers.
 - **Persistent Identity**: Your device is your server. No account creation required.
 - **Bootstrap via QR**: Scan a friend's **Onion Address** QR code to join the network.
+- **Censorship-Resistant Updates**: The app updates itself entirely over the Tor network using cryptographic signatures (RSA) and Nostr relays. No app store needed!
 
 ## How to Run
 
