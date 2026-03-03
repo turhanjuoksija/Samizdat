@@ -36,8 +36,8 @@ class ConnectionManager {
     suspend fun startListening(port: Int) = withContext(Dispatchers.IO) {
         if (isRunning) return@withContext
         try {
-            // Listen on all interfaces (0.0.0.0) so Tor can connect via localhost
-            serverSocket = ServerSocket(port)
+            // Bind strictly to the localhost loopback interface to prevent local network exposure
+            serverSocket = ServerSocket(port, 50, java.net.InetAddress.getLoopbackAddress())
             isRunning = true
             Log.i(TAG, "Server started and listening on port $port")
             
