@@ -105,9 +105,12 @@ class NostrBootstrapManager(private val context: Context) {
                     sig = ""
                 )
 
-                // 4. Mine the event (Proof of Work — difficulty 20, takes longer)
-                val minedEvent = NostrPoWMiner.mineEvent(event, TARGET_DIFFICULTY, privHex) { progress ->
-                    onStatusUpdate("Nostr: $progress")
+                // 4. Mine the event (Proof of Work — difficulty 22, takes longer)
+                // Wrapped in Dispatchers.Default to avoid blocking IO threads
+                val minedEvent = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                    NostrPoWMiner.mineEvent(event, TARGET_DIFFICULTY, privHex) { progress ->
+                        onStatusUpdate("Nostr: $progress")
+                    }
                 }
 
                 onStatusUpdate("Nostr: Broadcasting to Relays...")
@@ -260,23 +263,30 @@ class NostrBootstrapManager(private val context: Context) {
         
         if (kind == BOOTSTRAP_KIND) {
             // VERIFY PROOF OF WORK FIRST! (Sybil protection)
-            if (NostrPoWMiner.countLeadingZeroBits(id) >= TARGET_DIFFICULTY) {
-                val tags = eventJson.optJSONArray("tags")
-                tags?.let {
-                    for (i in 0 until it.length()) {
-                        val tagArray = it.optJSONArray(i)
-                        // Extract our custom tag ["samizdat_onion", "the_onion_address..."]
-                        if (tagArray != null && tagArray.length() >= 2 && tagArray.getString(0) == "samizdat_onion") {
-                            val onion = tagArray.getString(1)
-                            if (onion.endsWith(".onion")) {
-                                Log.d(TAG, "Found valid bootstrap onion: $onion")
-                                onAddressFound(onion, createdAt)
-                            }
+            if (NostrPoWMiner.countLeadingZeroBits(id) < TARGET_DIFFICULTY) {
+                Log.w(TAG, "Ignored event $id: FAILED Proof of Work check. (Potential Sybil)")
+                return
+            }
+
+            // VERIFY SCHNORR SIGNATURE (prevents forged events)
+            if (!NostrCryptoUtils.verifyEvent(eventJson)) {
+                Log.w(TAG, "Ignored event $id: FAILED Schnorr signature verification.")
+                return
+            }
+
+            val tags = eventJson.optJSONArray("tags")
+            tags?.let {
+                for (i in 0 until it.length()) {
+                    val tagArray = it.optJSONArray(i)
+                    // Extract our custom tag ["samizdat_onion", "the_onion_address..."]
+                    if (tagArray != null && tagArray.length() >= 2 && tagArray.getString(0) == "samizdat_onion") {
+                        val onion = tagArray.getString(1)
+                        if (onion.endsWith(".onion")) {
+                            Log.d(TAG, "Found valid bootstrap onion: $onion (sig OK)")
+                            onAddressFound(onion, createdAt)
                         }
                     }
                 }
-            } else {
-                Log.w(TAG, "Ignored event $id: FAILED Proof of Work check. (Potential Sybil)")
             }
         }
     }
@@ -367,6 +377,12 @@ class NostrBootstrapManager(private val context: Context) {
     ) {
         val kind = eventJson.optInt("kind", 0)
         if (kind != UPDATE_KIND) return
+
+        // VERIFY SCHNORR SIGNATURE before processing update data
+        if (!NostrCryptoUtils.verifyEvent(eventJson)) {
+            Log.w(TAG, "Ignored update event: FAILED Schnorr signature verification.")
+            return
+        }
 
         var version = -1
         var url = ""

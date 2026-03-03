@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.samizdat"
         minSdk = 26 // Supporting back to Android 8.0
         targetSdk = 34
-        versionCode = 12
-        versionName = "0.5"
+        versionCode = 17 // app updated already to versio 14. remember to bump this when updating app
+        versionName = "0.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

@@ -19,6 +19,11 @@ class UpdateManager(
     private val torManager: SamizdatTorManager
 ) {
 
+    companion object {
+        // Maximum allowed APK download size (100 MB) to prevent storage exhaustion attacks
+        private const val MAX_APK_DOWNLOAD_BYTES = 100L * 1024 * 1024
+    }
+
     val currentVersionCode: Int = try {
         val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
@@ -110,11 +115,25 @@ class UpdateManager(
             if (!response.isSuccessful) throw java.io.IOException("Download failed: HTTP ${response.code}")
             
             val body = response.body ?: throw java.io.IOException("Empty response body")
+            
+            // SECURITY: Enforce maximum download size to prevent storage exhaustion
+            val maxSize = MAX_APK_DOWNLOAD_BYTES
+            var totalBytesRead = 0L
+            
             body.byteStream().use { input ->
                 FileOutputStream(destination).use { output ->
-                    input.copyTo(output)
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        totalBytesRead += bytesRead
+                        if (totalBytesRead > maxSize) {
+                            throw java.io.IOException("Download exceeded maximum size of ${maxSize / (1024 * 1024)} MB — aborting")
+                        }
+                        output.write(buffer, 0, bytesRead)
+                    }
                 }
             }
+            Log.i("UpdateManager", "Downloaded ${totalBytesRead / 1024} KB")
         }
     }
 

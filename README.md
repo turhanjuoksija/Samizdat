@@ -45,6 +45,7 @@ A decentralized, serverless ride-sharing application for Android via Tor and Kad
 - [x] Reputation system (Vouch-based, local calculation).
 - [x] Future ride scheduling (up to 1 week, max 5 active intents).
 - [x] Secure software updates through the network (Nostr + P2P Gossip).
+- [x] **Security Hardened**: Enforced Tor-only routing, Schnorr event verification, and secure storage bindings.
 - [ ] Geocast message system.
 - [ ] Notification system.
 - [ ] Chat-Ride linking (connect chat threads to specific ride offers).

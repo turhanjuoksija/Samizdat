@@ -139,3 +139,11 @@ Sovelluksen päivitykset levitetään P2P-verkossa ilman erillistä käyttöliit
   3. Run the automated script: `~/projects/samizdat/publish_update.sh` (This script gathers the APK, hashes it, signs the hash with `private_rsa.pem` using SHA256withRSA, publishes the `Kind 10338` event to Nostr, and stages the APK for hosting.)
   4. Ensure Tor is running and serve the staging directory via Python HTTP server: `cd ~/samizdat_updates/ && python3 -m http.server 8080`.
   5. **Note on Crypto**: All developer update signatures and internal identity keys run on **SHA256withRSA**, not Ed25519. Android devices running API < 33 (Android 13) do not have native KeyStore support for Ed25519, which caused silent signature validation failures on older devices.
+
+## 18. Tietoturvaparannukset v2 (Security Hardening Phase 2) - 3.3.2026 🔒
+Toteutettiin laaja koodikatselmointi ja korjattiin löydetyt kriittiset ja korkean tason haavoittuvuudet:
+- **Nostr Schnorr Signature Verification (Kriittinen)**: `NostrBootstrapManager` vahvistaa nyt Nostr-eventtien `sig`-kentän (BIP340 Schnorr) käyttämällä eventin ID:tä, estäen väärennettyjen onion-osoitteiden ja päivitystapahumien syöttämisen. ID:n uudelleenlaskenta on vain varoitus (yhteensopivuus mm. `nak`-työkalun kanssa).
+- **Android Backup poistettu (Kriittinen)**: `AndroidManifest.xml` -> `allowBackup="false"`. Estää Torin `.onion` yksityisavaimen ja Room-tietokannan viennin ADB-backupilla.
+- **SOCKS Port Null-Safety (Korkea)**: Poistettu kaikki 8+ tapausta `?: 9050` hardkoodauksesta. Yhteyksiä ei yritetä muodostaa ennen kuin Tor-palvelu on antanut dynaamisen SOCKS-portin.
+- **Strict Tor Routing (Korkea)**: `ConnectionManager.sendMessage` hyväksyy vain `.onion` päätteisiä osoitteita ja verkkovirheet heittävät `SecurityException`. Estää suorat TCP IP -yhteydet ja IP:n paljastumisen.
+- **APK Download Size Limit (Korkea)**: `UpdateManager` rajoittaa päivitystiedostot enintään 100 MB kokoiseksi (`MAX_APK_DOWNLOAD_BYTES`), suojaten laitteen tallennustilan täyttämiseltä.

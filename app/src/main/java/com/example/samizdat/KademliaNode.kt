@@ -35,6 +35,8 @@ class KademliaNode(private val myOnionAddress: String) {
         val gridId: String,
         val senderOnion: String,
         val senderNickname: String,
+        val pubKey: String = "",
+        val signature: String = "",
         val content: String,
         val timestamp: Long,
         val ttlSeconds: Int = 3600,

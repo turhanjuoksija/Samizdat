@@ -27,6 +27,20 @@ object CryptoUtils {
         }
     }
 
+    fun getPublicKey(): String? {
+        return try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
+            keyStore.load(null)
+            val entry = keyStore.getEntry(ALIAS, null) as? KeyStore.PrivateKeyEntry
+            if (entry != null) {
+                Base64.getEncoder().encodeToString(entry.certificate.publicKey.encoded)
+            } else null
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
     fun verifySignature(data: String, signatureBase64: String, publicKeyEncoded: ByteArray): Boolean {
         return try {
             val kf = java.security.KeyFactory.getInstance("RSA")

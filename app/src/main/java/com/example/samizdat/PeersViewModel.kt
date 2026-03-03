@@ -46,7 +46,7 @@ class PeersViewModel(
         scope = viewModelScope,
         onDebugLog = { msg -> _debugLogs.add(0, msg) },
         getTorOnionAddress = { torManager.onionAddress.value },
-        getTorSocksPort = { torManager.socksPort.value ?: 9050 },
+        getTorSocksPort = { torManager.socksPort.value },
         sendMessageToPeer = { target, message, socksPort ->
             repository.sendMessage(target, message, socksPort)
         }
@@ -187,6 +187,15 @@ class PeersViewModel(
         dhtManager.getRouteGrids = { routeManager.routeGrids }
         dhtManager.getCurrentGridId = { routeManager.myGridId }
         dhtManager.getStoredPeers = { storedPeers.first() }
+        dhtManager.savePeerInfo = { onion, nick, pubKey ->
+            savePeer(
+                lastKnownIp = onion,
+                nickname = nick,
+                publicKey = onion,
+                onion = onion,
+                fullPk = pubKey
+            )
+        }
         dhtManager.getListeningRadius = {
             if (myRole == "PASSENGER") {
                 kotlin.math.ceil(maxWalkingDistanceMeters / 500.0).toInt().coerceIn(1, 5)
@@ -269,8 +278,8 @@ class PeersViewModel(
                         val targetPeer = currentPeers.find { it.publicKey == peerPk }
                         if (targetPeer != null && !targetPeer.onion.isNullOrEmpty()) {
                             launch {
+                                val currentSocksPort = torManager.socksPort.value ?: return@launch
                                 try {
-                                    val currentSocksPort = torManager.socksPort.value ?: 9050
                                     repository.sendMessage(targetPeer.onion, payload, currentSocksPort)
                                 } catch (e: Exception) {
                                     // ignore fast-loop errors
@@ -391,8 +400,8 @@ class PeersViewModel(
                             if (targetOnion != null) {
                                 _debugLogs.add(0, "GOSSIP: Pushing update to ${senderNick ?: targetOnion} (they have v$peerAppVersion)")
                                 viewModelScope.launch {
+                                    val currentSocksPort = torManager.socksPort.value ?: return@launch
                                     try {
-                                        val currentSocksPort = torManager.socksPort.value ?: 9050
                                         repository.sendMessage(targetOnion, cachedUpdate, currentSocksPort)
                                     } catch (e: Exception) {
                                         // Ignore send failures
@@ -544,7 +553,12 @@ class PeersViewModel(
                 }
                 val payload = json.toString()
                 
-                val currentSocksPort = torManager.socksPort.value ?: 9050
+                val currentSocksPort = torManager.socksPort.value
+                if (currentSocksPort == null) {
+                    repository.updateMessage(initialMsg.copy(id = msgId, status = "FAILED"))
+                    _debugLogs.add(0, "ERROR: Tor SOCKS port not available")
+                    return@launch
+                }
                 repository.sendMessage(peer.lastKnownIp, payload, currentSocksPort)
                 
                 repository.updateMessage(initialMsg.copy(id = msgId, status = "DELIVERED"))
@@ -627,8 +641,7 @@ class PeersViewModel(
             try {
                 delay(500) 
                 val payload = getMyStatusPayload()
-                val currentSocksPort = torManager.socksPort.value ?: 9050
-                // Using explicit port now
+                val currentSocksPort = torManager.socksPort.value ?: return@launch
                 repository.sendMessage(cleanOnion, payload, currentSocksPort)
                 _debugLogs.add(0, "HANDSHAKE: Sent Hello to $localNickname")
             } catch (e: Exception) {
@@ -668,8 +681,8 @@ class PeersViewModel(
             currentPeers.forEach { peer ->
                 if (peer.isTrusted || peer.onion != null) {
                     launch {
+                        val currentSocksPort = torManager.socksPort.value ?: return@launch
                         try {
-                            val currentSocksPort = torManager.socksPort.value ?: 9050
                             repository.sendMessage(peer.lastKnownIp, payload, currentSocksPort)
                             Log.i("PeersViewModel", "Status sent to ${peer.nickname}")
                         } catch (e: Exception) {
@@ -865,10 +878,10 @@ class PeersViewModel(
             
             savePeer(peer.lastKnownIp, peer.nickname, peer.publicKey, peer.onion, peer.role, peer.seats, peer.extraInfo, peer.latitude, peer.longitude, peer.destLat, peer.destLon, peer.fullPublicKey)
 
+            val currentSocksPort = torManager.socksPort.value ?: return@launch
             storedPeers.first().forEach { p ->
                 if (!p.onion.isNullOrEmpty()) {
                     try {
-                        val currentSocksPort = torManager.socksPort.value ?: 9050
                         repository.sendMessage(p.onion, vouchJson, currentSocksPort)
                     } catch (e: Exception) {
                         Log.e("PeersViewModel", "Failed to send vouch to ${p.nickname}")
@@ -911,7 +924,7 @@ class PeersViewModel(
                     cachedUpdateJson = json.toString()
                     
                     // Re-broadcast to all our peers
-                    val currentSocksPort = torManager.socksPort.value ?: 9050
+                    val currentSocksPort = torManager.socksPort.value ?: return@launch
                     val peers = storedPeers.first()
                     var gossipCount = 0
                     peers.forEach { peer ->

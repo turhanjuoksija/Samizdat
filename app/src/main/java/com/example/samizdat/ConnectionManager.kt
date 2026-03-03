@@ -27,7 +27,7 @@ class ConnectionManager {
     }
 
     // Track message counts per IP for rate limiting
-    private val rateLimitMap = java.util.concurrent.ConcurrentHashMap<String, MutableList<Long>>()
+    // (Removed: IP rate limiting is ineffective/harmful when all traffic comes from localhost 127.0.0.1 via Tor)
     
     // Emissions of received messages: Pair(SenderIP, MessageContent)
     private val _incomingMessages = MutableSharedFlow<Pair<String, String>>()
@@ -66,30 +66,27 @@ class ConnectionManager {
             val writer = PrintWriter(socket.getOutputStream().writer(Charsets.UTF_8), true)
             val senderIp = socket.inetAddress.hostAddress ?: "Unknown"
 
-            // Read messages line by line
-            // BufferedReader handles UTF-8 decoding correctly
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                val msg = line?.trim() ?: continue
+            // Read messages safely, bounded to MAX_MESSAGE_SIZE to prevent OOM
+            val sb = StringBuilder()
+            var charInput: Int
+            while (reader.read().also { charInput = it } != -1) {
+                val char = charInput.toChar()
+                if (char == '\n') {
+                    val msg = sb.toString().trim()
+                    sb.clear()
 
-                if (msg.isEmpty()) continue
+                    if (msg.isEmpty()) continue
 
-                // Check message size limit (approximate, since we already read it into memory)
-                if (msg.length > MAX_MESSAGE_SIZE) {
-                     Log.w(TAG, "Message from $senderIp exceeded length limit, dropping connection")
-                     break
+                    Log.d(TAG, "Received from $senderIp: ${msg.take(200)}${if (msg.length > 200) "..." else ""}")
+                    _incomingMessages.emit(senderIp to msg)
+                    writer.println("OK")
+                } else {
+                    sb.append(char)
+                    if (sb.length > MAX_MESSAGE_SIZE) {
+                        Log.w(TAG, "Message from $senderIp exceeded length limit, dropping connection")
+                        break
+                    }
                 }
-
-                // Rate limiting check
-                if (!checkRateLimit(senderIp)) {
-                    Log.w(TAG, "Rate limit exceeded for $senderIp, dropping message")
-                    writer.println("RATE_LIMITED")
-                    continue
-                }
-
-                Log.d(TAG, "Received from $senderIp: ${msg.take(200)}${if (msg.length > 200) "..." else ""}")
-                _incomingMessages.emit(senderIp to msg)
-                writer.println("OK")
             }
             socket.close()
         } catch (e: java.net.SocketTimeoutException) {
@@ -101,36 +98,24 @@ class ConnectionManager {
         }
     }
 
-    private fun checkRateLimit(ip: String): Boolean {
-        val now = System.currentTimeMillis()
-        val timestamps = rateLimitMap.getOrPut(ip) { mutableListOf() }
-        synchronized(timestamps) {
-            // Remove old entries outside the window
-            timestamps.removeAll { it < now - RATE_LIMIT_WINDOW_MS }
-            if (timestamps.size >= RATE_LIMIT_MAX_MESSAGES) {
-                return false
-            }
-            timestamps.add(now)
-        }
-        return true
-    }
+    // IP-based checkRateLimit removed
 
-    suspend fun sendMessage(ip: String, port: Int, message: String, socksPort: Int = 9050) = withContext(Dispatchers.IO) {
+    suspend fun sendMessage(ip: String, port: Int, message: String, socksPort: Int) = withContext(Dispatchers.IO) {
         val finalIp = OnionUtils.ensureOnionSuffix(ip)
-        val isOnion = OnionUtils.isOnion(finalIp)
-        val targetPort = if (isOnion) 80 else port 
+        
+        // SECURITY: Reject non-onion addresses to prevent Tor bypass
+        if (!OnionUtils.isOnion(finalIp)) {
+            Log.e(TAG, "SECURITY: Refusing to connect to non-onion address: $finalIp")
+            throw SecurityException("All connections must use .onion addresses via Tor")
+        }
+        
+        val targetPort = 80 // Tor hidden services always use port 80
         try {
-            Log.d(TAG, "Connecting to $finalIp:$targetPort (isOnion: $isOnion, Proxy: $socksPort)")
+            Log.d(TAG, "Connecting to $finalIp:$targetPort via Tor SOCKS proxy :$socksPort")
             
-            val socket = if (isOnion) {
-                Log.i(TAG, "Using Tor SOCKS proxy at 127.0.0.1:$socksPort for $finalIp")
-                // Use Tor SOCKS proxy
-                val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
-                Socket(proxy).apply {
-                    connect(InetSocketAddress.createUnresolved(finalIp, targetPort), 30000) 
-                }
-            } else {
-                Socket(finalIp, targetPort)
+            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+            val socket = Socket(proxy).apply {
+                connect(InetSocketAddress.createUnresolved(finalIp, targetPort), 30000) 
             }
             
             val writer = PrintWriter(socket.getOutputStream().writer(Charsets.UTF_8), true)
@@ -147,9 +132,7 @@ class ConnectionManager {
             Log.d(TAG, "Message sent and delivered to $finalIp")
         } catch (e: Exception) {
              Log.e(TAG, "Failed to send message to $finalIp:$targetPort. Error: ${e.message}", e)
-             if (isOnion) {
-                 Log.e(TAG, "Hint: Onion connections can take several minutes to become available after Tor initialization.")
-             }
+             Log.e(TAG, "Hint: Onion connections can take several minutes to become available after Tor initialization.")
              throw e
         }
     }
@@ -161,6 +144,5 @@ class ConnectionManager {
         } catch (e: Exception) {
             Log.e(TAG, "Error closing server", e)
         }
-        rateLimitMap.clear()
     }
 }

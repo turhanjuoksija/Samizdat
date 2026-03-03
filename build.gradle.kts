@@ -4,3 +4,8 @@ plugins {
     id("com.android.library") version "8.2.0" apply false
     id("org.jetbrains.kotlin.android") version "1.9.24" apply false
 }
+
+// Yes, this file is required! 
+// It is the top-level build file that defines the Android and Kotlin plugins 
+// and their versions for the entire project. Without it, the app/ module 
+// won't know where to find the 'com.android.application' plugin.

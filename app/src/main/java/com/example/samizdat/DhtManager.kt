@@ -23,7 +23,7 @@ class DhtManager(
     private val scope: CoroutineScope,
     private val onDebugLog: (String) -> Unit,
     private val getTorOnionAddress: () -> String?,
-    private val getTorSocksPort: () -> Int,
+    private val getTorSocksPort: () -> Int?,
     private val sendMessageToPeer: suspend (String, String, Int) -> Unit
 ) {
     // Kademlia DHT Node (initialized once we have an onion address)
@@ -45,6 +45,7 @@ class DhtManager(
     var getRouteGrids: () -> List<String> = { emptyList() }
     var getCurrentGridId: () -> String? = { null }
     var getStoredPeers: suspend () -> List<Peer> = { emptyList() }
+    var savePeerInfo: (onion: String, nickname: String, pubKey: String) -> Unit = { _, _, _ -> }
 
     /**
      * Initialize Kademlia DHT node once we have an onion address
@@ -131,12 +132,17 @@ class DhtManager(
         } ?: emptyList()
 
 
-            
             // Allow overriding origin/dest for Future Rides (instead of trusting RouteManager's current state)
+            val myPubKey = CryptoUtils.getPublicKey() ?: ""
+            val payloadToSign = "$gridId|$myOnion|$myNickname|$content|$timestamp"
+            val signature = CryptoUtils.signData(payloadToSign) ?: ""
+
             val message = KademliaNode.GridMessage(
             gridId = gridId,
             senderOnion = myOnion,
             senderNickname = myNickname,
+            pubKey = myPubKey,
+            signature = signature,
             content = content,
             timestamp = timestamp,
             routePoints = routePointsList,
@@ -171,6 +177,8 @@ class DhtManager(
                 put("grid_id", gridId)
                 put("sender_onion", myOnion)
                 put("sender_nick", myNickname)
+                put("pub_key", myPubKey)
+                put("signature", signature)
                 put("content", content)
                 put("timestamp", message.timestamp)
                 put("ttl", message.ttlSeconds)
@@ -187,11 +195,16 @@ class DhtManager(
                 if (customTimeWindow != null) put("time_win", customTimeWindow)
             }.toString()
 
+            val socksPort = getTorSocksPort()
+            if (socksPort == null) {
+                onDebugLog("DHT: Tor not ready, skipping broadcast")
+                return@launch
+            }
             val peers = getStoredPeers()
             peers.forEach { peer ->
                 if (!peer.onion.isNullOrEmpty() && peer.onion != myOnion) {
                     try {
-                        sendMessageToPeer(peer.onion, dhtJson, getTorSocksPort())
+                        sendMessageToPeer(peer.onion, dhtJson, socksPort)
                         onDebugLog("DHT: Forwarded to ${peer.nickname}")
                     } catch (e: Exception) {
                         Log.e("DhtManager", "DHT forward failed to ${peer.nickname}: ${e.message}")
@@ -208,21 +221,50 @@ class DhtManager(
     fun handleDhtMessage(json: JSONObject) {
         val node = kademliaNode ?: return
         
-        val gridId = json.optString("grid_id", "")
-        val senderOnion = json.optString("sender_onion", "")
-        val senderNick = MessageValidator.sanitizeString(json.optString("sender_nick", "Unknown"), MessageValidator.MAX_NICKNAME_LENGTH)
-        val content = MessageValidator.sanitizeString(json.optString("content", ""), MessageValidator.MAX_CONTENT_LENGTH)
-        val timestamp = json.optLong("timestamp", System.currentTimeMillis())
-        val ttl = MessageValidator.clampTtl(json.optInt("ttl", 3600))
+        scope.launch {
+            val gridId = json.optString("grid_id", "")
+            val senderOnion = json.optString("sender_onion", "")
+            val senderNick = MessageValidator.sanitizeString(json.optString("sender_nick", "Unknown"), MessageValidator.MAX_NICKNAME_LENGTH)
+            val pubKey = json.optString("pub_key", "")
+            val signature = json.optString("signature", "")
+            val content = MessageValidator.sanitizeString(json.optString("content", ""), MessageValidator.MAX_CONTENT_LENGTH)
+            val timestamp = json.optLong("timestamp", System.currentTimeMillis())
+            val ttl = MessageValidator.clampTtl(json.optInt("ttl", 3600))
 
-        // Validate required fields
-        if (!MessageValidator.isValidGridId(gridId)) return
-        if (content.isEmpty()) return
-        if (!MessageValidator.isValidOnionAddress(senderOnion)) return
-        if (!MessageValidator.isValidTimestamp(timestamp)) return
+            // Validate required fields
+            if (!MessageValidator.isValidGridId(gridId)) return@launch
+            if (content.isEmpty()) return@launch
+            if (!MessageValidator.isValidOnionAddress(senderOnion)) return@launch
+            if (!MessageValidator.isValidTimestamp(timestamp)) return@launch
 
-        // Parse route data with size limit
-        val routePointsJson = json.optJSONArray("route_points")
+            // Cryptographic Verification & TOFU
+            if (pubKey.isEmpty() || signature.isEmpty()) {
+                Log.w("DhtManager", "Missing pubKey or signature from $senderOnion. Message rejected.")
+                return@launch
+            }
+
+            val payloadToVerify = "$gridId|$senderOnion|$senderNick|$content|$timestamp"
+            val pubKeyBytes = try { java.util.Base64.getDecoder().decode(pubKey) } catch (e: Exception) { null }
+            if (pubKeyBytes == null || !CryptoUtils.verifySignature(payloadToVerify, signature, pubKeyBytes)) {
+                Log.w("DhtManager", "Invalid signature from $senderOnion. Message rejected.")
+                return@launch
+            }
+
+            // Trust On First Use (TOFU)
+            val existingPeers = getStoredPeers()
+            val knownPeer = existingPeers.find { it.onion == senderOnion }
+            if (knownPeer != null && !knownPeer.fullPublicKey.isNullOrEmpty()) {
+                if (knownPeer.fullPublicKey != pubKey) {
+                    Log.w("DhtManager", "SPOOF DETECTED: pubKey does not match known identity for $senderOnion")
+                    return@launch
+                }
+            } else {
+                // First time seeing this pubKey for this onion
+                savePeerInfo(senderOnion, senderNick, pubKey)
+            }
+
+            // Parse route data with size limit
+            val routePointsJson = json.optJSONArray("route_points")
         val routePoints = mutableListOf<Pair<Double, Double>>()
         if (routePointsJson != null) {
             val limit = minOf(routePointsJson.length(), MessageValidator.MAX_ROUTE_POINTS)
@@ -270,6 +312,8 @@ class DhtManager(
             gridId = gridId,
             senderOnion = senderOnion,
             senderNickname = senderNick,
+            pubKey = pubKey,
+            signature = signature,
             content = content,
             timestamp = timestamp,
             ttlSeconds = ttl,
@@ -298,6 +342,7 @@ class DhtManager(
             node.addPeer(senderOnion)
         }
     }
+}
 
     /**
      * Get messages from a specific grid
@@ -492,12 +537,19 @@ class DhtManager(
             emptyList()
         }
 
+        val timestamp = System.currentTimeMillis()
+        val myPubKey = CryptoUtils.getPublicKey() ?: ""
+        val payloadToSign = "$gridId|$myOnion|$myNickname|$content|$timestamp"
+        val signature = CryptoUtils.signData(payloadToSign) ?: ""
+
         val message = KademliaNode.GridMessage(
             gridId = gridId,
             senderOnion = myOnion,
             senderNickname = myNickname,
+            pubKey = myPubKey,
+            signature = signature,
             content = content,
-            timestamp = System.currentTimeMillis(),
+            timestamp = timestamp,
             ttlSeconds = 86400, // 24 hours TTL for future rides
             routePoints = listOf(Pair(intent.originLat, intent.originLon), Pair(intent.destLat, intent.destLon)),
             routeGrids = routeGrids,
@@ -522,8 +574,10 @@ class DhtManager(
                 put("grid_id", gridId)
                 put("sender_onion", myOnion)
                 put("sender_nick", myNickname)
+                put("pub_key", myPubKey)
+                put("signature", signature)
                 put("content", content)
-                put("timestamp", message.timestamp)
+                put("timestamp", timestamp)
                 put("ttl", message.ttlSeconds)
                 // Minimal route points
                 put("route_points", JSONArray().apply {
@@ -539,11 +593,16 @@ class DhtManager(
                 put("time_win", intent.flexibleTimeWindow)
             }.toString()
 
+            val socksPort = getTorSocksPort()
+            if (socksPort == null) {
+                onDebugLog("DHT: Tor not ready, skipping intent broadcast")
+                return@launch
+            }
             val peers = getStoredPeers()
             peers.forEach { peer ->
                 if (!peer.onion.isNullOrEmpty() && peer.onion != myOnion) {
                     try {
-                        sendMessageToPeer(peer.onion, dhtJson, getTorSocksPort())
+                        sendMessageToPeer(peer.onion, dhtJson, socksPort)
                     } catch (e: Exception) {
                         // ignore
                     }
