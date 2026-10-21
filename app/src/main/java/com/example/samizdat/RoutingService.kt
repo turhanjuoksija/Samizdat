@@ -3,17 +3,48 @@ package com.example.samizdat
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONObject
 import org.osmdroid.util.GeoPoint
-import java.net.URL
+import java.util.concurrent.TimeUnit
 
 /**
  * Service for fetching road-based routes using OSRM (Open Source Routing Machine).
  * Uses the free OSRM demo server.
+ *
+ * NOTE: The OSRM demo server rejects Android's default `Dalvik/...` User-Agent with
+ * HTTP 403, so every request must carry [USER_AGENT]. Requests currently go over
+ * clearnet (not Tor) - see kartta_paatosmuistio Phase 1 (offline BRouter) for the
+ * privacy-preserving replacement.
  */
 object RoutingService {
     private const val TAG = "RoutingService"
     private const val OSRM_BASE_URL = "https://router.project-osrm.org/route/v1/driving"
+
+    /** Identifying User-Agent required by OSRM demo and OSM tile usage policies. */
+    val USER_AGENT = "Samizdat/${BuildConfig.VERSION_NAME} (+https://github.com/turhanjuoksija/Samizdat)"
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(20, TimeUnit.SECONDS)
+        .build()
+
+    /** Performs a GET and returns the body, or null on any HTTP/network error. */
+    private fun httpGet(url: String): String? {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", USER_AGENT)
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                Log.e(TAG, "OSRM HTTP ${response.code}")
+                return null
+            }
+            return response.body?.string()
+        }
+    }
 
     /**
      * Fetch a road-following route between two points.
@@ -28,9 +59,9 @@ object RoutingService {
                 "${start.longitude},${start.latitude};${end.longitude},${end.latitude}"
             }
             val url = "$OSRM_BASE_URL/$pointsStr?overview=full&geometries=geojson"
-            Log.d(TAG, "Fetching route: $url")
+            Log.d(TAG, "Fetching route (${if (waypoint != null) 3 else 2} points)")
 
-            val response = URL(url).readText()
+            val response = httpGet(url) ?: return@withContext null
             val json = JSONObject(response)
 
             if (json.getString("code") != "Ok") {
@@ -69,7 +100,7 @@ object RoutingService {
     suspend fun getRouteSummary(start: GeoPoint, end: GeoPoint): Pair<Double, Double>? = withContext(Dispatchers.IO) {
         try {
             val url = "$OSRM_BASE_URL/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=false"
-            val response = URL(url).readText()
+            val response = httpGet(url) ?: return@withContext null
             val json = JSONObject(response)
 
             if (json.getString("code") != "Ok") return@withContext null

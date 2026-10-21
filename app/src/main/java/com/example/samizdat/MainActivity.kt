@@ -75,6 +75,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Initialize osmdroid configuration early with required User-Agent
+        val customConfig = object : org.osmdroid.config.DefaultConfigurationProvider() {
+            override fun getNormalizedUserAgent(): String = RoutingService.USER_AGENT
+        }
+        org.osmdroid.config.Configuration.setConfigurationProvider(customConfig)
+        customConfig.load(this, android.preference.PreferenceManager.getDefaultSharedPreferences(this))
+        customConfig.userAgentValue = RoutingService.USER_AGENT
+        customConfig.save(this, android.preference.PreferenceManager.getDefaultSharedPreferences(this))
         
         // --- Dependency Injection (Manual) ---
         val context = applicationContext

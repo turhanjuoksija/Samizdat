@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.osmdroid.util.GeoPoint
 
@@ -49,6 +50,13 @@ class RouteManager(
     // Grid IDs that the route passes through
     var routeGrids by mutableStateOf<List<String>>(emptyList())
         private set
+
+    // True if at least one route segment is a straight-line fallback (routing service failed)
+    var routeIsApproximate by mutableStateOf(false)
+        private set
+
+    // Currently running route calculation (cancelled when a newer one starts)
+    private var routeJob: Job? = null
     
     // Role-specific persistence
     private var driverDestLat: Double? = null
@@ -131,6 +139,7 @@ class RouteManager(
         myWaypoints.clear()
         roadRoute = null
         routeGrids = emptyList()
+        routeIsApproximate = false
         
         // Clear persisted state for all roles
         driverDestLat = null
@@ -211,32 +220,48 @@ class RouteManager(
         }
 
         if (pointsToVisit.size < 2) {
+            routeJob?.cancel()
             roadRoute = null
             routeGrids = emptyList()
+            routeIsApproximate = false
             return
         }
 
-        scope.launch {
+        routeJob?.cancel()
+        routeJob = scope.launch {
             onDebugLog("ROUTE: Calculating ${pointsToVisit.size} stops...")
             val fullRoute = mutableListOf<GeoPoint>()
+            val grids = linkedSetOf<String>()
+            var fallbackSegments = 0
             
-            // Calculate segments
+            // Calculate segments. A failed segment falls back to a straight line so that
+            // routeGrids is never empty and DHT ride offers are still propagated.
             for (i in 0 until pointsToVisit.size - 1) {
                 val segmentStart = pointsToVisit[i]
                 val segmentEnd = pointsToVisit[i + 1]
                 val segmentRoute = RoutingService.getRoute(segmentStart, segmentEnd, null)
                 
-                if (segmentRoute != null) {
+                if (!segmentRoute.isNullOrEmpty()) {
                     fullRoute.addAll(segmentRoute)
+                    grids.addAll(RadioGridUtils.getRouteGridsFromPolyline(segmentRoute))
+                } else {
+                    fallbackSegments++
+                    fullRoute.add(segmentStart)
+                    fullRoute.add(segmentEnd)
+                    // Roads deviate from the straight line, so pad with neighbouring cells
+                    RadioGridUtils.getRouteGrids(segmentStart, segmentEnd).forEach { gridId ->
+                        grids.addAll(RadioGridUtils.getNeighborGrids(gridId, 1))
+                    }
                 }
             }
 
-            if (fullRoute.isNotEmpty()) {
-                roadRoute = fullRoute
-                routeGrids = RadioGridUtils.getRouteGridsFromPolyline(fullRoute)
-                onDebugLog("ROUTE: Total ${fullRoute.size} pts, ${routeGrids.size} grids")
+            roadRoute = fullRoute
+            routeGrids = grids.toList()
+            routeIsApproximate = fallbackSegments > 0
+            if (fallbackSegments > 0) {
+                onDebugLog("ROUTE: Routing failed for $fallbackSegments segment(s), using straight-line fallback. ${routeGrids.size} grids")
             } else {
-                onDebugLog("ROUTE: Failed to calculate")
+                onDebugLog("ROUTE: Total ${fullRoute.size} pts, ${routeGrids.size} grids")
             }
         }
     }

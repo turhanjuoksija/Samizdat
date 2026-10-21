@@ -53,6 +53,9 @@ Emme käytä enää suoria "linnun tietä" -viivoja.
 - **Service**: `RoutingService.kt` käyttää OSRM Demo API:a (`project-osrm.org`) reitin laskemiseen.
   - **HUOM**: Tämä on ilmainen demo-palvelu, jota **ei saa käyttää kaupallisesti tai raskaaseen liikenteeseen**. Lopullisessa tuotantoversiossa tarvitset oman OSRM-serverin tai maksullisen reitityspalvelun (esim. Mapbox).
 - **Grids from Route**: `RadioGridUtils.getRouteGridsFromPolyline()` muuntaa tieuran listaksi Grid-ID:itä, joihin kuljettajan ilmoitus propagoidaan.
+- **User-Agent (PAKOLLINEN) - 21.10.2026**: OSRM demo palauttaa HTTP 403 Androidin oletus-UA:lle (`Dalvik/...`), ja OSM-tiilipalvelin palauttaa "Access blocked" -tiilen UA:ille `com.example.*` ja `osmdroid`. Molemmat käyttävät `RoutingService.USER_AGENT` (`Samizdat/<versionName> (+github-url)`). **ÄLÄ** palauta `URL.readText()`-kutsuja tai `context.packageName`-UA:ta.
+- **Fallback (linnuntie)**: Jos reitin osuus epäonnistuu, `RouteManager` käyttää osuudelle suoraa viivaa + naapuriruudut (`getNeighborGrids(r=1)`). `routeGrids` ei siis koskaan jää tyhjäksi, ja `routeIsApproximate = true` piirtää reitin katkoviivana.
+- **Tietosuoja**: Reitti- ja tiilipyynnöt kulkevat yhä clearnetin kautta (EI Torin). Suunnitelma: offline-reititys BRouterilla (Vaihe 1) ja tiilet Torin kautta (Vaihe 2).
 
 ## 7. .onion Osoitteiden Käsittely (`OnionUtils`) 🌐
 Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen, jotta Android ja Tor osaavat reitittää viestit oikein.

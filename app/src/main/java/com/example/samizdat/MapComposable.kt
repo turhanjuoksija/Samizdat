@@ -28,6 +28,8 @@ import androidx.core.content.ContextCompat
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.XYTileSource
+import org.osmdroid.tileprovider.tilesource.TileSourcePolicy
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import android.widget.Toast
@@ -164,7 +166,9 @@ fun MapComposable(
     // Initialize osmdroid configuration
     remember {
         Configuration.getInstance().load(context, android.preference.PreferenceManager.getDefaultSharedPreferences(context))
-        Configuration.getInstance().userAgentValue = context.packageName
+        // OSM tile servers return an "Access blocked" tile for com.example.* / osmdroid UAs
+        Configuration.getInstance().userAgentValue = RoutingService.USER_AGENT
+        Configuration.getInstance().save(context, android.preference.PreferenceManager.getDefaultSharedPreferences(context))
         true
     }
     
@@ -179,9 +183,24 @@ fun MapComposable(
     // Peer Selection for Dialog
     var selectedPeer by remember { mutableStateOf<Peer?>(null) }
 
+    val samizdatTileSource = remember {
+        XYTileSource(
+            "Mapnik",
+            0, 19, 256, ".png",
+            arrayOf("https://tile.openstreetmap.org/"),
+            "© OpenStreetMap contributors",
+            TileSourcePolicy(
+                2,
+                TileSourcePolicy.FLAG_NO_BULK or
+                TileSourcePolicy.FLAG_NO_PREVENTIVE or
+                TileSourcePolicy.FLAG_USER_AGENT_MEANINGFUL
+            )
+        )
+    }
+
     val mapView = remember {
         MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            setTileSource(samizdatTileSource)
             setMultiTouchControls(true)
             setBuiltInZoomControls(false) // Disable default buttons to prevent accidental destination clicks
             controller.setZoom(15.0)
@@ -343,6 +362,9 @@ fun MapComposable(
                              line.setPoints(viewModel.roadRoute)
                              line.outlinePaint.color = Color.BLUE
                              line.outlinePaint.strokeWidth = 5f
+                             if (viewModel.routeIsApproximate) {
+                                 line.outlinePaint.pathEffect = DashPathEffect(floatArrayOf(20f, 15f), 0f)
+                             }
                              map.overlays.add(line)
                         } else if (myRole != "DRIVER") {
                             val points = mutableListOf<org.osmdroid.util.GeoPoint>()
@@ -433,6 +455,10 @@ fun MapComposable(
                         routeLine.setPoints(route)
                         routeLine.outlinePaint.color = Color.CYAN
                         routeLine.outlinePaint.strokeWidth = 8f
+                        if (viewModel?.routeIsApproximate == true) {
+                            // Straight-line fallback: routing service unavailable
+                            routeLine.outlinePaint.pathEffect = DashPathEffect(floatArrayOf(30f, 20f), 0f)
+                        }
                         map.overlays.add(routeLine)
                     }
                 }

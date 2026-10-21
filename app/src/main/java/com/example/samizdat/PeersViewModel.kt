@@ -94,6 +94,7 @@ class PeersViewModel(
     val myWaypoints get() = routeManager.myWaypoints
     val roadRoute: List<org.osmdroid.util.GeoPoint>? get() = routeManager.roadRoute
     val routeGrids: List<String> get() = routeManager.routeGrids
+    val routeIsApproximate: Boolean get() = routeManager.routeIsApproximate
     var maxWalkingDistanceMeters: Int
         get() = routeManager.maxWalkingDistanceMeters
         set(value) { routeManager.maxWalkingDistanceMeters = value }
