@@ -11,6 +11,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -199,7 +201,8 @@ fun MapComposable(
     }
 
     val mapView = remember {
-        MapView(context).apply {
+        // Tiles are downloaded only through Tor (see TorTileDownloader); cached tiles still work offline
+        MapView(context, TorMapTileProvider(context.applicationContext, samizdatTileSource)).apply {
             setTileSource(samizdatTileSource)
             setMultiTouchControls(true)
             setBuiltInZoomControls(false) // Disable default buttons to prevent accidental destination clicks
@@ -800,6 +803,12 @@ fun MapComposable(
         onDispose {
             mapView.onPause()
         }
+    }
+
+    // Tiles load only over Tor: redraw once Tor is ready so tiles that gave up waiting are re-requested
+    val torReady = viewModel?.isTorBootstrapped?.collectAsState()?.value ?: false
+    LaunchedEffect(torReady) {
+        if (torReady) mapView.invalidate()
     }
 }
 

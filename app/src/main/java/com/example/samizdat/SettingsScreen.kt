@@ -190,6 +190,9 @@ fun SettingsScreen(
                     val downloadState by segments.downloadState.collectAsState()
                     val torBootstrapped by viewModel.isTorBootstrapped.collectAsState()
                     val isDownloading = downloadState is SegmentManager.DownloadState.Downloading
+                    val installedNames = installed.map { it.name }.toSet()
+                    val canDownload = torBootstrapped && !isDownloading
+                    val catalogMb = SegmentManager.FINLAND_REGIONS.associate { it.name to it.approxMb }
 
                     if (installed.isEmpty()) {
                         Text(
@@ -199,30 +202,28 @@ fun SettingsScreen(
                     } else {
                         val totalMb = installed.sumOf { it.sizeBytes } / (1024 * 1024)
                         Text("Offline data: ${installed.size} region(s), $totalMb MB", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                        installed.forEach { seg ->
+                    }
+
+                    // --- Progress / status ---
+                    when (val state = downloadState) {
+                        is SegmentManager.DownloadState.Downloading -> {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            val progress = if (state.bytesTotal > 0) state.bytesDone.toFloat() / state.bytesTotal else 0f
+                            LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("${seg.name}  (${seg.sizeBytes / (1024 * 1024)} MB)", style = MaterialTheme.typography.bodySmall)
-                                TextButton(onClick = { segments.delete(seg.name) }, enabled = !isDownloading) {
-                                    Text("Delete", color = Color(0xFFB00020))
+                                val queue = if (state.count > 1) " (${state.index}/${state.count})" else ""
+                                Text(
+                                    "Downloading ${state.segment}$queue over Tor: ${state.bytesDone / (1024 * 1024)} / ${state.bytesTotal / (1024 * 1024)} MB",
+                                    fontSize = 11.sp, color = Color.DarkGray, modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { viewModel.cancelSegmentDownload() }) {
+                                    Text("Cancel", color = Color(0xFFB00020))
                                 }
                             }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    when (val state = downloadState) {
-                        is SegmentManager.DownloadState.Downloading -> {
-                            val progress = if (state.bytesTotal > 0) state.bytesDone.toFloat() / state.bytesTotal else 0f
-                            LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
-                            Text(
-                                "Downloading ${state.segment} over Tor: ${state.bytesDone / (1024 * 1024)} / ${state.bytesTotal / (1024 * 1024)} MB",
-                                fontSize = 11.sp, color = Color.DarkGray
-                            )
                         }
                         is SegmentManager.DownloadState.Error ->
                             Text("Download failed: ${state.message}", fontSize = 11.sp, color = Color(0xFFB00020))
@@ -231,28 +232,94 @@ fun SettingsScreen(
                         else -> {}
                     }
 
+                    // --- Active route coverage ---
+                    val required = viewModel.routeRequiredSegments()
+                    if (required.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Active route", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            required.joinToString("   ") { if (it in installedNames) "✅ $it" else "⬜ $it" },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        val missing = required.filterNot { it in installedNames }
+                        if (missing.isEmpty()) {
+                            Text("Your whole route is calculated on this phone.", fontSize = 11.sp, color = Color(0xFF2E7D32))
+                        } else {
+                            val knownMb = missing.mapNotNull { catalogMb[it] }
+                            val sizeHint = if (knownMb.size == missing.size) ", ~${knownMb.sum()} MB" else ""
+                            Button(
+                                onClick = { viewModel.downloadRouteSegments() },
+                                enabled = canDownload,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    if (!torBootstrapped) "Waiting for Tor..."
+                                    else "Download missing for route (${missing.size} region(s)$sizeHint)"
+                                )
+                            }
+                        }
+                    }
+
+                    // --- Region around me ---
+                    Spacer(modifier = Modifier.height(8.dp))
                     val hasLocation = viewModel.myLatitude != null && viewModel.myLongitude != null
                     val regionName = if (hasLocation) {
                         SegmentManager.segmentName(viewModel.myLatitude!!, viewModel.myLongitude!!)
                     } else null
+                    val regionInstalled = regionName != null && regionName in installedNames
 
-                    Button(
-                        onClick = {
-                            segments.clearDownloadState()
-                            viewModel.downloadOfflineRegion()
-                        },
-                        enabled = hasLocation && torBootstrapped && !isDownloading && (regionName == null || !segments.isInstalled(regionName)),
+                    OutlinedButton(
+                        onClick = { viewModel.downloadOfflineRegion() },
+                        enabled = hasLocation && canDownload && !regionInstalled,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             when {
-                                regionName != null && installed.any { it.name == regionName } -> "Region around you is installed ($regionName)"
+                                regionInstalled -> "Region around you is installed ($regionName)"
                                 !hasLocation -> "Waiting for location..."
                                 !torBootstrapped -> "Waiting for Tor..."
-                                else -> "Download region around me ($regionName, via Tor)"
+                                else -> "Download region around me ($regionName)"
                             }
                         )
                     }
+
+                    // --- Finland region picker ---
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Regions (Finland)", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                    val catalogNames = SegmentManager.FINLAND_REGIONS.map { it.name }.toSet()
+                    val extraInstalled = installed.filter { it.name !in catalogNames }
+                    val rows: List<Pair<String, String>> =
+                        SegmentManager.FINLAND_REGIONS.map { it.name to it.label } +
+                        extraInstalled.map { it.name to "Other region" }
+
+                    rows.forEach { (name, label) ->
+                        val seg = installed.firstOrNull { it.name == name }
+                        val isCurrent = (downloadState as? SegmentManager.DownloadState.Downloading)?.segment == name
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    (if (seg != null) "✅ " else "") + name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(label, fontSize = 11.sp, color = Color.DarkGray)
+                            }
+                            when {
+                                seg != null -> TextButton(onClick = { segments.delete(name) }, enabled = !isDownloading) {
+                                    Text("Delete (${seg.sizeBytes / (1024 * 1024)} MB)", color = Color(0xFFB00020), fontSize = 12.sp)
+                                }
+                                isCurrent -> Text("Downloading...", fontSize = 12.sp, color = Color.DarkGray)
+                                else -> TextButton(onClick = { viewModel.downloadSegments(listOf(name)) }, enabled = canDownload) {
+                                    Text(catalogMb[name]?.let { "Get ~$it MB" } ?: "Get", fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         "Downloads go through Tor. Once installed, routes are calculated on your phone and never leave it.",
                         fontSize = 10.sp, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()

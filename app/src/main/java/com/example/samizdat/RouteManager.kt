@@ -197,12 +197,12 @@ class RouteManager(
     }
 
     /**
-     * Calculate road route from current location -> [waypoints] -> destination
-     * Uses OSRM API for road-based routing
+     * Ordered stops of the active route: current location -> waypoints -> destination.
+     * Empty if the location is unknown.
      */
-    fun calculateRoute() {
-        val startLat = myLatitude ?: return
-        val startLon = myLongitude ?: return
+    private fun buildStops(): List<GeoPoint> {
+        val startLat = myLatitude ?: return emptyList()
+        val startLon = myLongitude ?: return emptyList()
         
         val pointsToVisit = mutableListOf<GeoPoint>()
         pointsToVisit.add(GeoPoint(startLat, startLon))
@@ -219,6 +219,35 @@ class RouteManager(
                 pointsToVisit.add(GeoPoint(myDestLat!!, myDestLon!!))
             }
         }
+        return pointsToVisit
+    }
+
+    /**
+     * Offline routing segments needed to route every leg of the active route with BRouter.
+     * Uses the same per-leg bounding-box rule as [BRouterEngine]. Empty if there is no route.
+     */
+    fun requiredSegments(): List<String> {
+        val stops = buildStops()
+        if (stops.size < 2) return emptyList()
+        val names = linkedSetOf<String>()
+        for (i in 0 until stops.size - 1) {
+            names.addAll(
+                SegmentManager.segmentsCovering(
+                    stops[i].latitude, stops[i].longitude,
+                    stops[i + 1].latitude, stops[i + 1].longitude
+                )
+            )
+        }
+        return names.toList()
+    }
+
+    /**
+     * Calculate road route from current location -> [waypoints] -> destination
+     * Uses OSRM API for road-based routing
+     */
+    fun calculateRoute() {
+        if (myLatitude == null || myLongitude == null) return
+        val pointsToVisit = buildStops()
 
         if (pointsToVisit.size < 2) {
             routeJob?.cancel()

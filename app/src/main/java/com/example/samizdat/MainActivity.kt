@@ -93,6 +93,10 @@ class MainActivity : ComponentActivity() {
         val repository = PeerRepository(db.peerDao(), db.messageDao(), db.vouchDao(), db.rideIntentDao(), connectionManager)
         val updateManager = UpdateManager(application, torManager)
         val segmentManager = SegmentManager(application) { torManager.socksPort.value }
+        // Map tiles are fetched only over Tor; hand out the port only once Tor is fully bootstrapped
+        TorTileDownloader.socksPortProvider = {
+            if (torManager.isBootstrapped.value) torManager.socksPort.value else null
+        }
         
         val factory = PeersViewModelFactory(repository, torManager, updateManager, segmentManager)
         viewModel = ViewModelProvider(this, factory)[PeersViewModel::class.java]

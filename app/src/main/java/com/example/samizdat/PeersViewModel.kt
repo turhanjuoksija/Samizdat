@@ -968,6 +968,11 @@ class PeersViewModel(
 
     // ========== OFFLINE ROUTING DATA ==========
 
+    private var segmentDownloadJob: kotlinx.coroutines.Job? = null
+
+    /** Segments the active route needs for fully offline routing (empty if no route). */
+    fun routeRequiredSegments(): List<String> = routeManager.requiredSegments()
+
     /**
      * Downloads the BRouter segment covering the user's current position over Tor,
      * then recalculates the route so it is computed offline.
@@ -979,13 +984,41 @@ class PeersViewModel(
             _debugLogs.add(0, "OFFLINE DATA: No location yet - cannot pick a region")
             return
         }
-        val segment = SegmentManager.segmentName(lat, lon)
-        viewModelScope.launch {
-            _debugLogs.add(0, "OFFLINE DATA: Downloading $segment over Tor...")
-            segmentManager.download(listOf(segment))
+        downloadSegments(listOf(SegmentManager.segmentName(lat, lon)))
+    }
+
+    /** Downloads every segment the active route needs but that is not installed yet. */
+    fun downloadRouteSegments() {
+        val missing = routeManager.requiredSegments().filterNot { segmentManager.isInstalled(it) }
+        if (missing.isEmpty()) {
+            _debugLogs.add(0, "OFFLINE DATA: Route already fully covered by offline data")
+            return
+        }
+        downloadSegments(missing)
+    }
+
+    /**
+     * Downloads the given segments over Tor (one job at a time) and recalculates the route
+     * afterwards so newly covered legs switch from OSRM to offline BRouter.
+     */
+    fun downloadSegments(names: List<String>) {
+        if (segmentDownloadJob?.isActive == true) return
+        val label = names.joinToString(", ")
+        segmentManager.clearDownloadState()
+        segmentDownloadJob = viewModelScope.launch {
+            _debugLogs.add(0, "OFFLINE DATA: Downloading $label over Tor...")
+            segmentManager.download(names)
             val state = segmentManager.downloadState.value
-            _debugLogs.add(0, "OFFLINE DATA: $segment -> ${if (state is SegmentManager.DownloadState.Error) "FAILED: ${state.message}" else "OK"}")
+            _debugLogs.add(0, "OFFLINE DATA: $label -> ${if (state is SegmentManager.DownloadState.Error) "FAILED: ${state.message}" else "OK"}")
             if (state is SegmentManager.DownloadState.Done) routeManager.calculateRoute()
+        }
+    }
+
+    fun cancelSegmentDownload() {
+        if (segmentDownloadJob?.isActive == true) {
+            segmentDownloadJob?.cancel()
+            segmentManager.cancelActiveDownload()
+            _debugLogs.add(0, "OFFLINE DATA: Download cancelled")
         }
     }
 
