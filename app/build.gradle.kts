@@ -110,6 +110,11 @@ dependencies {
     // Google Play Services (Location)
     implementation("com.google.android.gms:play-services-location:21.2.0")
     implementation("org.osmdroid:osmdroid-android:6.1.18")
+
+    // Offline routing (BRouter). Pinned to v1.7.9: v1.7.10 fails to build on JitPack.
+    implementation("com.github.abrensch.brouter:brouter-core:v1.7.9")
+    // Runtime-scoped in brouter-core's POM, but its types (OsmNode, OsmPos) are needed at compile time
+    implementation("com.github.abrensch.brouter:brouter-mapaccess:v1.7.9")
     
     testImplementation("junit:junit:4.13.2")
 }

@@ -30,14 +30,19 @@ import androidx.compose.runtime.setValue
 class PeersViewModel(
     private val repository: PeerRepository,
     val torManager: SamizdatTorManager,
-    val updateManager: UpdateManager
+    val updateManager: UpdateManager,
+    val segmentManager: SegmentManager
 ) : ViewModel() {
     
     // ========== MANAGERS ==========
     
-    /** Route Manager - handles all routing, GPS, and waypoint logic */
+    /**
+     * Route Manager - handles all routing, GPS, and waypoint logic.
+     * Engine order: BRouter (offline, private) -> OSRM (online, temporary fallback) -> straight line.
+     */
     val routeManager = RouteManager(
         scope = viewModelScope,
+        engines = listOf(BRouterEngine(segmentManager), OsrmEngine),
         onDebugLog = { msg -> _debugLogs.add(0, msg) }
     )
     
@@ -961,6 +966,29 @@ class PeersViewModel(
         handleUpdateMessage(org.json.JSONObject(jsonPayload))
     }
 
+    // ========== OFFLINE ROUTING DATA ==========
+
+    /**
+     * Downloads the BRouter segment covering the user's current position over Tor,
+     * then recalculates the route so it is computed offline.
+     */
+    fun downloadOfflineRegion() {
+        val lat = routeManager.myLatitude
+        val lon = routeManager.myLongitude
+        if (lat == null || lon == null) {
+            _debugLogs.add(0, "OFFLINE DATA: No location yet - cannot pick a region")
+            return
+        }
+        val segment = SegmentManager.segmentName(lat, lon)
+        viewModelScope.launch {
+            _debugLogs.add(0, "OFFLINE DATA: Downloading $segment over Tor...")
+            segmentManager.download(listOf(segment))
+            val state = segmentManager.downloadState.value
+            _debugLogs.add(0, "OFFLINE DATA: $segment -> ${if (state is SegmentManager.DownloadState.Error) "FAILED: ${state.message}" else "OK"}")
+            if (state is SegmentManager.DownloadState.Done) routeManager.calculateRoute()
+        }
+    }
+
     // ========== LIFECYCLE ==========
 
     override fun onCleared() {
@@ -973,12 +1001,13 @@ class PeersViewModel(
 class PeersViewModelFactory(
     private val repository: PeerRepository, 
     private val torManager: SamizdatTorManager,
-    private val updateManager: UpdateManager
+    private val updateManager: UpdateManager,
+    private val segmentManager: SegmentManager
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(PeersViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return PeersViewModel(repository, torManager, updateManager) as T
+            return PeersViewModel(repository, torManager, updateManager, segmentManager) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

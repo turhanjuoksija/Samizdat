@@ -175,6 +175,92 @@ fun SettingsScreen(
             }
         }
 
+        // Offline Routing Data (BRouter segments, downloaded over Tor)
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFE0F2F1))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Offline Routing 🧭", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val segments = viewModel.segmentManager
+                    val installed by segments.installed.collectAsState()
+                    val downloadState by segments.downloadState.collectAsState()
+                    val torBootstrapped by viewModel.isTorBootstrapped.collectAsState()
+                    val isDownloading = downloadState is SegmentManager.DownloadState.Downloading
+
+                    if (installed.isEmpty()) {
+                        Text(
+                            "No offline data installed. Routes are calculated by an online service, which reveals your route to a third party.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    } else {
+                        val totalMb = installed.sumOf { it.sizeBytes } / (1024 * 1024)
+                        Text("Offline data: ${installed.size} region(s), $totalMb MB", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        installed.forEach { seg ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("${seg.name}  (${seg.sizeBytes / (1024 * 1024)} MB)", style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = { segments.delete(seg.name) }, enabled = !isDownloading) {
+                                    Text("Delete", color = Color(0xFFB00020))
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    when (val state = downloadState) {
+                        is SegmentManager.DownloadState.Downloading -> {
+                            val progress = if (state.bytesTotal > 0) state.bytesDone.toFloat() / state.bytesTotal else 0f
+                            LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
+                            Text(
+                                "Downloading ${state.segment} over Tor: ${state.bytesDone / (1024 * 1024)} / ${state.bytesTotal / (1024 * 1024)} MB",
+                                fontSize = 11.sp, color = Color.DarkGray
+                            )
+                        }
+                        is SegmentManager.DownloadState.Error ->
+                            Text("Download failed: ${state.message}", fontSize = 11.sp, color = Color(0xFFB00020))
+                        is SegmentManager.DownloadState.Done ->
+                            Text("Download complete.", fontSize = 11.sp, color = Color(0xFF2E7D32))
+                        else -> {}
+                    }
+
+                    val hasLocation = viewModel.myLatitude != null && viewModel.myLongitude != null
+                    val regionName = if (hasLocation) {
+                        SegmentManager.segmentName(viewModel.myLatitude!!, viewModel.myLongitude!!)
+                    } else null
+
+                    Button(
+                        onClick = {
+                            segments.clearDownloadState()
+                            viewModel.downloadOfflineRegion()
+                        },
+                        enabled = hasLocation && torBootstrapped && !isDownloading && (regionName == null || !segments.isInstalled(regionName)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            when {
+                                regionName != null && installed.any { it.name == regionName } -> "Region around you is installed ($regionName)"
+                                !hasLocation -> "Waiting for location..."
+                                !torBootstrapped -> "Waiting for Tor..."
+                                else -> "Download region around me ($regionName, via Tor)"
+                            }
+                        )
+                    }
+                    Text(
+                        "Downloads go through Tor. Once installed, routes are calculated on your phone and never leave it.",
+                        fontSize = 10.sp, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
         // Debug Logs
         item {
             Card(

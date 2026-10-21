@@ -55,7 +55,16 @@ Emme käytä enää suoria "linnun tietä" -viivoja.
 - **Grids from Route**: `RadioGridUtils.getRouteGridsFromPolyline()` muuntaa tieuran listaksi Grid-ID:itä, joihin kuljettajan ilmoitus propagoidaan.
 - **User-Agent (PAKOLLINEN) - 21.10.2026**: OSRM demo palauttaa HTTP 403 Androidin oletus-UA:lle (`Dalvik/...`), ja OSM-tiilipalvelin palauttaa "Access blocked" -tiilen UA:ille `com.example.*` ja `osmdroid`. Molemmat käyttävät `RoutingService.USER_AGENT` (`Samizdat/<versionName> (+github-url)`). **ÄLÄ** palauta `URL.readText()`-kutsuja tai `context.packageName`-UA:ta.
 - **Fallback (linnuntie)**: Jos reitin osuus epäonnistuu, `RouteManager` käyttää osuudelle suoraa viivaa + naapuriruudut (`getNeighborGrids(r=1)`). `routeGrids` ei siis koskaan jää tyhjäksi, ja `routeIsApproximate = true` piirtää reitin katkoviivana.
-- **Tietosuoja**: Reitti- ja tiilipyynnöt kulkevat yhä clearnetin kautta (EI Torin). Suunnitelma: offline-reititys BRouterilla (Vaihe 1) ja tiilet Torin kautta (Vaihe 2).
+- **Tietosuoja**: OSRM-reittipyynnöt ja karttatiilet kulkevat yhä clearnetin kautta (EI Torin). Reitit lasketaan ensisijaisesti laitteessa BRouterilla (alla); tiilet Torin kautta on Vaihe 2.
+- **Offline-reititys (BRouter, Vaihe 1) - 21.10.2026**:
+  - `RouteManager` käy `RouteEngine`-moottorit läpi osuuskohtaisesti: `BRouterEngine` (offline) → `OsrmEngine` (väliaikainen online-vara) → suora viiva.
+  - Riippuvuus: `com.github.abrensch.brouter:brouter-core:v1.7.9` JitPackista (`settings.gradle.kts`, content-suodatettu vain tälle ryhmälle). **ÄLÄ päivitä v1.7.10:een**: se ei käänny JitPackissa (tila "Error"). Tarkista `https://jitpack.io/api/builds/com.github.abrensch/brouter` ennen päivitystä.
+  - Profiili: `assets/brouter/car-vario.brf` + `lookups.dat` (`car-fast.brf` EI ole olemassa). `lookups.dat` pitää olla samassa kansiossa kuin `.brf` ja sen versio täsmätä `.rd5`-segmentteihin (muuten "lookup version mismatch"). `BRouterEngine` kopioi nämä `filesDir/brouter/profiles2/`.
+  - Data: `filesDir/brouter/segments4/E20_N60.rd5` jne. (5°x5° ruudut, 10–40 Mt). `SegmentManager` lataa ne `https://brouter.de/brouter/segments4/` **Torin SOCKS-portin kautta** (`torManager.socksPort.value`, ei hardkoodattu). Lataus tallennetaan `.part`-tiedostoon, tarkistetaan koko (max 100 Mt) ja nimetään vasta onnistuneena.
+  - BRouterin staattiset välimuistit eivät ole säieturvallisia → `BRouterEngine` serialisoi ajot `Mutex`illa. Reitti peruuntuu `RoutingEngine.terminate()`-kutsulla.
+  - Jos osuus tarvitsee segmentin jota ei ole asennettu, `BRouterEngine` palauttaa `null` (ei kaadu) ja seuraava moottori yrittää.
+  - UI: Settings → "Offline Routing" -kortti (lataus GPS-sijainnin ruudulle, poisto, edistyminen).
+  - Desktop-spike (Helsinki→Tampere, E20_N60, car-vario): 179,2 km, 1772 solmua, ~7 s.
 
 ## 7. .onion Osoitteiden Käsittely (`OnionUtils`) 🌐
 Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen, jotta Android ja Tor osaavat reitittää viestit oikein.

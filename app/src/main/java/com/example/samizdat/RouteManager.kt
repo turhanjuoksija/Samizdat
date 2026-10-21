@@ -15,11 +15,12 @@ import org.osmdroid.util.GeoPoint
  * RouteManager handles all routing and location-related logic.
  * - GPS position tracking
  * - Destination and waypoint management
- * - Road route calculation via OSRM
+ * - Road route calculation via [RouteEngine]s (BRouter offline first, OSRM as temporary online fallback)
  * - Grid ID calculation for DHT
  */
 class RouteManager(
     private val scope: CoroutineScope,
+    private val engines: List<RouteEngine>,
     private val onDebugLog: (String) -> Unit
 ) {
     // Current location
@@ -234,12 +235,20 @@ class RouteManager(
             val grids = linkedSetOf<String>()
             var fallbackSegments = 0
             
-            // Calculate segments. A failed segment falls back to a straight line so that
-            // routeGrids is never empty and DHT ride offers are still propagated.
+            // Calculate segments. Engines are tried in order; a segment that no engine can route
+            // falls back to a straight line so that routeGrids is never empty and DHT ride offers
+            // are still propagated.
             for (i in 0 until pointsToVisit.size - 1) {
                 val segmentStart = pointsToVisit[i]
                 val segmentEnd = pointsToVisit[i + 1]
-                val segmentRoute = RoutingService.getRoute(segmentStart, segmentEnd, null)
+                var segmentRoute: List<GeoPoint>? = null
+                for (engine in engines) {
+                    segmentRoute = engine.route(segmentStart, segmentEnd)
+                    if (!segmentRoute.isNullOrEmpty()) {
+                        onDebugLog("ROUTE: leg ${i + 1} via ${engine.name} (${segmentRoute.size} pts)")
+                        break
+                    }
+                }
                 
                 if (!segmentRoute.isNullOrEmpty()) {
                     fullRoute.addAll(segmentRoute)

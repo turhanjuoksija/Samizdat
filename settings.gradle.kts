@@ -10,6 +10,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // BRouter (offline routing) is only published via JitPack. Restricted to its group.
+        maven {
+            url = uri("https://jitpack.io")
+            content { includeGroup("com.github.abrensch.brouter") }
+        }
     }
 }
 

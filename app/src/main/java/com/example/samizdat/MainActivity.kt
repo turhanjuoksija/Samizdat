@@ -92,8 +92,9 @@ class MainActivity : ComponentActivity() {
         val connectionManager = ConnectionManager()
         val repository = PeerRepository(db.peerDao(), db.messageDao(), db.vouchDao(), db.rideIntentDao(), connectionManager)
         val updateManager = UpdateManager(application, torManager)
+        val segmentManager = SegmentManager(application) { torManager.socksPort.value }
         
-        val factory = PeersViewModelFactory(repository, torManager, updateManager)
+        val factory = PeersViewModelFactory(repository, torManager, updateManager, segmentManager)
         viewModel = ViewModelProvider(this, factory)[PeersViewModel::class.java]
 
         val futureFactory = FutureRidesViewModelFactory(repository, viewModel)
