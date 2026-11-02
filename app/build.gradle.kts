@@ -1,12 +1,15 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("kotlin-kapt")
+    // AGP 9 built-in Kotlin: no org.jetbrains.kotlin.android here. kapt comes from AGP's legacy-kapt.
+    id("com.android.legacy-kapt")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
     namespace = "com.example.samizdat"
-    compileSdk = 34
+    compileSdk = 37 // Required by tor-android 0.4.9.12+ (minCompileSdk=37). targetSdk stays 34.
 
     defaultConfig {
         applicationId = "com.example.samizdat"
@@ -35,18 +38,12 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
-    kotlinOptions {
-        jvmTarget = "1.8"
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures {
         compose = true
         buildConfig = true // Needed for BuildConfig.VERSION_NAME (User-Agent)
-    }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14" // Matches Kotlin 1.9.24
     }
     packaging {
         jniLibs {
@@ -72,12 +69,18 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+    }
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
-    implementation(platform("androidx.compose:compose-bom:2023.08.00"))
+    implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -97,15 +100,11 @@ dependencies {
     implementation("io.matthewnelson.kmp-tor:runtime-service:2.0.0")
     implementation("io.matthewnelson.kmp-tor:resource-exec-tor:408.13.0")
 
-    // Use Room 2.7 to support Kotlin 2.0 metadata from libraries
-    val room_version = "2.7.0-alpha12"
+    // Room (kapt for now; KSP migration later)
+    val room_version = "2.8.5"
     implementation("androidx.room:room-runtime:$room_version")
     implementation("androidx.room:room-ktx:$room_version")
     kapt("androidx.room:room-compiler:$room_version")
-    
-    // Fix for Room compiler vs Kotlin 2.0 metadata (from kmp-tor)
-    // Fix for Room compiler vs Kotlin 2.0 metadata (from kmp-tor)
-    kapt("org.jetbrains.kotlinx:kotlinx-metadata-jvm:0.9.0")
     
     // Google Play Services (Location)
     implementation("com.google.android.gms:play-services-location:21.2.0")
@@ -117,15 +116,4 @@ dependencies {
     implementation("com.github.abrensch.brouter:brouter-mapaccess:v1.7.9")
     
     testImplementation("junit:junit:4.13.2")
-}
-
-configurations.all {
-    resolutionStrategy.eachDependency {
-        if (requested.group == "org.jetbrains.kotlin" && requested.name.startsWith("kotlin-stdlib")) {
-            useVersion("1.9.24")
-        }
-        if (requested.group == "org.jetbrains.kotlinx" && requested.name.startsWith("kotlinx-coroutines")) {
-            useVersion("1.8.1") // Last version compatible with Kotlin 1.9
-        }
-    }
 }
