@@ -9,13 +9,19 @@ plugins {
 
 android {
     namespace = "com.example.samizdat"
-    compileSdk = 37 // Required by tor-android 0.4.9.12+ (minCompileSdk=37). targetSdk stays 34.
+    // tor-android 0.4.9.12+ requires compile SDK 37.1 (AAR minCompileSdk=37, minCompileMinorSdk=1).
+    // targetSdk stays 34.
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 1
+        }
+    }
 
     defaultConfig {
         applicationId = "com.example.samizdat"
         minSdk = 26 // Supporting back to Android 8.0
         targetSdk = 34
-        versionCode = 18 // BRouter offline routing, Tor segment download & Tor-only map tiles
+        versionCode = 19 // Tor 0.4.9.14 via tor-android (was kmp-tor 0.4.8.13), AGP 9 toolchain
         versionName = "0.7-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -49,13 +55,9 @@ android {
         jniLibs {
             useLegacyPackaging = true
             pickFirsts += "**/libtor.so"
-            pickFirsts += "**/libevent.so"
-            pickFirsts += "**/libtorexec.so"
             
-            // Prevent stripping of Tor binaries which could break execution
+            // Keep the Tor JNI library unstripped (as shipped by tor-android)
             keepDebugSymbols += "**/libtor.so"
-            keepDebugSymbols += "**/libevent.so"
-            keepDebugSymbols += "**/libtorexec.so"
         }
         resources {
             pickFirsts += "META-INF/kotlin-stdlib-jdk8.kotlin_module"
@@ -95,10 +97,11 @@ dependencies {
     // Cryptography (Nostr Schnorr Signatures) — MUST use -jni-android, NOT -jvm!
     implementation("fr.acinq.secp256k1:secp256k1-kmp-jni-android:0.14.0")
 
-    // Tor (Kotlin 1.9 Compatible - oldest 2.x version)
-    implementation("io.matthewnelson.kmp-tor:runtime:2.0.0")
-    implementation("io.matthewnelson.kmp-tor:runtime-service:2.0.0")
-    implementation("io.matthewnelson.kmp-tor:resource-exec-tor:408.13.0")
+    // Tor (Guardian Project tor-android: in-process TorService + jtorctl control connection)
+    // tor-android 0.4.9.12+ requires compileSdk 37.
+    implementation("info.guardianproject:tor-android:0.4.9.14")
+    implementation("info.guardianproject:jtorctl:0.4.5.7")
+    implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0") // TorService status broadcasts
 
     // Room (kapt for now; KSP migration later)
     val room_version = "2.8.5"

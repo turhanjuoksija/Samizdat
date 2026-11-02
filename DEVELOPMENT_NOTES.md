@@ -8,20 +8,24 @@
 Tämä tiedosto sisältää kriittisiä huomioita projektin riippuvuuksista ja pakkausasetuksista. Lue tämä ennen kuin päivität kirjastoja tai muutat Gradle-asetuksia!
 
 ## 1. Tor & Native Libraries (Packaging) 📦
-Tor-integraatio (`kmp-tor`) on erittäin herkkä natiivikirjastojen suhteen.
-- **Conflict**: Useat kirjastot saattavat yrittää sisällyttää `libtor.so` ja `libevent.so` tiedostoja.
-- **Ratkaisu**: `build.gradle.kts` tiedostossa on `packaging` -> `resources` -> `pickFirsts` säännöt näille. Älä poista niitä.
-- **Dependencies**: Käytämme `resource-exec-tor` versiota. **ÄLÄ** lisää `resource-noexec-tor` kirjastoa, sillä se aiheuttaa duplikaattilähteitä ja kääntämisvirheitä.
+Tor ajetaan **sovelluksen omassa prosessissa** Guardian Projectin `tor-android`-kirjastolla (`info.guardianproject:tor-android`, JNI `libtor.so` + `TorService`). Ohjaus `jtorctl`:llä (`info.guardianproject:jtorctl`). (Vaihdettu kmp-torista 2.11.2026, ks. §19.)
+- **Packaging**: `build.gradle.kts` → `packaging.jniLibs`: `pickFirsts`/`keepDebugSymbols` vain `libtor.so`:lle. `libtorexec.so`/`libevent.so` -säännöt poistettu (ei enää käytössä).
+- **compileSdk**: tor-android 0.4.9.12+ vaatii compile SDK **37.1** (AAR: `minCompileSdk=37`, `minCompileMinorSdk=1`) → `compileSdk { version = release(37) { minorApiLevel = 1 } }`. `targetSdk` on erikseen (34).
+- **kapt + Java 24 -tavukoodi (TÄRKEÄ)**: tor-androidin luokat ovat class 68 (Java 24). kapt kääntää Kotlin-luokista Java-stubit JDK 17:n javacilla, joka ei osaa lukea niitä ("class file has wrong version 68.0"). Siksi `TorService`-tyyppiä **ei saa** käyttää kentän, parametrin tai paluuarvon tyyppinä missään tämän moduulin Kotlin-luokassa, vain funktioiden rungoissa (`SamizdatTorManager.torService: Service?` + cast). Pysyvä korjaus: Room → KSP (poistaa kaptin) tai JDK 24+ toolchain.
+- **Manifest**: AAR tuo `org.torproject.jni.TorService`-palvelun (ei exported) automaattisesti.
+- **ÄLÄ** lisää kmp-tor-riippuvuuksia takaisin rinnalle (kaksi Tor-toteutusta + `libtor.so`-konflikti).
 
 ## 2. Kotlin Metadata & Metadata-konfliktit 🧩
-Android Gradle Plugin (AGP) 8.x + Kotlin 1.9.x aiheuttavat usein "Duplicate archive copy" virheitä `META-INF` tiedostoissa.
-- **Sääntö**: `META-INF/kotlin-stdlib-jdk*.kotlin_module` tiedostoille on asetettu `pickFirst`.
+AGP 8.x + Kotlin 1.9.x aikainen "Duplicate archive copy" -ongelma. `kotlinx-metadata-jvm`-kapt-kikka ja kotlin-stdlib/coroutines-pakotus (`resolutionStrategy`) on **poistettu** (tarpeettomia AGP 9 + Kotlin 2.3:lla ja ilman kmp-toria).
+- **Sääntö**: `META-INF/kotlin-stdlib-jdk*.kotlin_module` tiedostoille on asetettu `pickFirst` (vaaraton, saa jäädä).
 - **Sääntö**: `META-INF/INDEX.LIST` ja `DEPENDENCIES` on asetettu `excludes` listalle.
+- **Room + Kotlin-versio**: Room 2.8.5:n kapt-prosessori lukee vain Kotlin-metadataa <= 2.3.0. Kotlin 2.4 → `kaptDebugKotlin` kaatuu ("Metadata instance has version 2.4.0"). Siksi Kotlin on lukittu **2.3.x**:ään juuren `build.gradle.kts`:ssä. Nosta vasta, kun Room tukee 2.4:ää tai siirrytään KSP:hen.
 
 ## 3. Tor Konfiguraatio (SOCKS Port) 🔌
-Tor-runtime vaatii tarkan tavan asettaa SOCKS-portti.
-- **Huomio**: Käytä aina `toPortEphemeral()` funktiota (yli 1024 portit), muuten Tor saattaa epäonnistua käynnistyksessä joillakin laitteilla.
+- **torrc**: `SamizdatTorManager` kirjoittaa ennen käynnistystä `TorService.getTorrc(context)` → `SOCKSPort auto` + `HTTPTunnelPort 0`. torrc ohittaa TorServicen `torrc-defaults`-tiedoston, joka muuten valitsisi 9050/8118 jos vapaana.
+- **Portin luku**: kun TorService lähettää `STATUS_ON`, portti luetaan `GETINFO net/listeners/socks` (muoto `"127.0.0.1:NNNN"`) → `socksPort`.
 - **Portti**: SOCKS-portti tulee aina lukea dynaamisesti `torManager.socksPort.value` kautta. **ÄLÄ** käytä hardkoodattua porttia 9050.
+- **setEvents**: Jos kutsut `TorControlConnection.setEvents(...)`, listassa on oltava `STATUS_CLIENT`, muuten TorService ei tunnista valmistumista. Bootstrap-% tulee `STATUS_CLIENT … BOOTSTRAP PROGRESS=NN` -tapahtumista (raw event listener).
 
 ## 4. Samizdat Envelope Protocol (v1 & v2 DHT) 📨
 Viestit kulkevat JSON-kääreessä ("Envelope").
@@ -89,13 +93,16 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - **Background Sync**: DHT-haku ja Status Broadcast tapahtuvat taustasäikeissä (`viewModelScope`) jumiutumisen välttämiseksi.
 
 ## 11. Tekninen ympäristö & Kääntäminen (Java 17) ☕
-- **Java versio**: Android Gradle Plugin 8.2+ ja Room 2.7 vaativat **Java 17** kääntäjän (JDK 17).
+- **Versiot (2.11.2026)**: AGP **9.4.1**, Gradle **9.8.2**, Kotlin **2.3.21** (lukittu, ks. §2), compile SDK **37.1**, targetSdk 34, Java/JVM target **17**.
+- **AGP 9 built-in Kotlin**: `org.jetbrains.kotlin.android`-pluginia **ei** sovelleta `app/`-moduulissa (juuressa `apply false` vain Kotlin-version lukitsemiseksi). kapt tulee `com.android.legacy-kapt`-pluginista, Compose `org.jetbrains.kotlin.plugin.compose`-pluginista (ei `composeOptions`ia). `kotlinOptions {}` → `kotlin { compilerOptions { … } }`.
+- **Java versio**: AGP 9.4 vaatii **JDK 17**. HUOM: tor-androidin Java 24 -tavukoodi rikkoo kaptin, jos `TorService` päätyy stubiin (ks. §1).
+- **SDK**: Puuttuvat `platforms;android-37.0`/`android-37.1` latautuivat AGP:n automaattisesti (lisenssit hyväksytty). `cmdline-tools`/`sdkmanager` ei ole asennettuna.
 - **Ongelmat**: Jos saat virheen `Android Gradle plugin requires Java 17 to run.`, varmista että Java 17 on asennettu (`sudo apt install openjdk-17-jdk` Linuxilla).
 - **Konfiguraatio**: Jos IDE ei löydä Javaa, lisää `gradle.properties` tiedostoon rivi: `org.gradle.java.home=/usr/lib/jvm/java-17-openjdk-amd64` (polku voi vaihdella käyttöjärjestelmästä riippuen).
 - **Gradle JVM Args**: Android-kehitinympäristössä `kapt` ja `compose` saattavat vaatia enemmän muistia. `gradle.properties` tiedostossa on `org.gradle.jvmargs=-Xmx2048m`, jotta kääntäminen ei kaadu muistiin (OutOfMemoryError).
 
 ---
-*Päivitetty viimeksi: 2026-02-27 (OTA Updater & RSA Crypto Fix)*
+*Päivitetty viimeksi: 2026-11-02 (Tor-päivitys: tor-android 0.4.9.14, AGP 9)*
 
 ## 12. Kartan ja Käyttöliittymän Päivitykset (UI/UX) - 24.1.2026 🗺️
 - **Undo-toiminto**: Korvattu kaksi erillistä poistonappia yhdellä `Undo (↩️)` -painikkeella, joka poistaa viimeisimmän reittipisteen.
@@ -166,3 +173,12 @@ Toteutettiin laaja koodikatselmointi ja korjattiin löydetyt kriittiset ja korke
 - **SOCKS Port Null-Safety (Korkea)**: Poistettu kaikki 8+ tapausta `?: 9050` hardkoodauksesta. Yhteyksiä ei yritetä muodostaa ennen kuin Tor-palvelu on antanut dynaamisen SOCKS-portin.
 - **Strict Tor Routing (Korkea)**: `ConnectionManager.sendMessage` hyväksyy vain `.onion` päätteisiä osoitteita ja verkkovirheet heittävät `SecurityException`. Estää suorat TCP IP -yhteydet ja IP:n paljastumisen.
 - **APK Download Size Limit (Korkea)**: `UpdateManager` rajoittaa päivitystiedostot enintään 100 MB kokoiseksi (`MAX_APK_DOWNLOAD_BYTES`), suojaten laitteen tallennustilan täyttämiseltä.
+
+## 19. Tor-päivitys: kmp-tor → tor-android 0.4.9.14 - 2.11.2026 🧅
+Syy: kmp-torin Tor oli 0.4.8.13 (EOL 1.6.2026, konsensus ei enää suosittele). kmp-tor-resource ei ole julkaissut helmikuun jälkeen.
+- **Kirjastot**: `info.guardianproject:tor-android:0.4.9.14` (Tor 0.4.9.14, OpenSSL 3.5.x) + `jtorctl:0.4.5.7` + `androidx.localbroadcastmanager`.
+- **`SamizdatTorManager`**: julkinen API ennallaan (`socksPort`, `onionAddress`, `isBootstrapped`, `statusMessage`, `startTor()`, `stopTor()`, `bootstrapManager`). Sisäisesti: torrc → `LocalBroadcastManager`-vastaanotin (`ACTION_STATUS`/`ACTION_ERROR`) → `bindService(TorService)` → `STATUS_ON` → `net/listeners/socks` → `ADD_ONION`.
+- **Onion-avain (osoite säilyy)**: `filesDir/onion_v3_private_key` = 64 tavua raakaa ED25519-laajennettua avainta (sama muoto kuin kmp-torilla). Olemassa oleva avain → `ADD_ONION ED25519-V3:<base64>`. Uusi → `NEW:ED25519-V3`, Torin palauttama `onionPrivKey` dekoodataan ja tallennetaan samaan tiedostoon (vain jos tasan 64 tavua). Lokiin kirjataan vain pituus. Hidden service: virtuaaliportti 80 → `127.0.0.1:12345`.
+- **Rajoitus – uudelleenkäynnistys samassa prosessissa**: Tor ajetaan JNI:llä (`tor_run_main`), ja TorServicessa on staattinen lukko. Toria ei saa ajaa kahdesti samanaikaisesti, ja toinen ajo samassa prosessissa on upstreamissa "best effort" (tor bug #23847). `PeersViewModel.onCleared()` kutsuu `stopTor()`, joten Back + avaus uudelleen käynnistää Torin samassa prosessissa. `startTor()` odottaa siksi vähintään 5 s edellisen pysäytyksen jälkeen. Jos tämä osoittautuu epävakaaksi, vaihtoehto on olla pysäyttämättä Toria `onCleared()`issa.
+- **Siivous**: Ensimmäisellä käynnistyksellä poistetaan kmp-torin `filesDir/torservice` ja `cacheDir/torservice` (pienellä kirjoitettuna; tor-androidin omat hakemistot ovat `app_TorService` ja `cacheDir/TorService`). Avaintiedostoon ei kosketa.
+- **Käännösympäristö** päivitetty samassa yhteydessä (§11): AGP 9.4.1, Gradle 9.8.2, Kotlin 2.3.21, Room 2.8.5, Compose BOM 2026.09.00, compile SDK 37.1.
