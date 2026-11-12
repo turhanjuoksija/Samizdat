@@ -29,9 +29,17 @@ fun SettingsScreen(
     onionAddress: String?,
     torStatus: String,
     qrBitmap: Bitmap?,
-    myHash: String?
+    myHash: String?,
+    onScanQrClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val savedPeers by viewModel.storedPeers.collectAsState(initial = emptyList())
+    val knownPeersCount = savedPeers.count { it.onion != onionAddress && it.publicKey != onionAddress }
+    val livePeersMap = viewModel.livePeerTimestamps.toMap()
+    val nowMs = System.currentTimeMillis()
+    val livePeersCount = livePeersMap.count { (onion, ts) ->
+        onion != onionAddress && (nowMs - ts) <= PeersViewModel.LIVE_PEER_WINDOW_MS
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -56,6 +64,36 @@ fun SettingsScreen(
                     Text("App v${packageInfo.versionName} (build $versionCode)", 
                          style = MaterialTheme.typography.bodySmall, 
                          color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Live Peers & Known Peers Status Row
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp).fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${if (livePeersCount > 0) "🟢" else "⚪"} Live Peers: $livePeersCount   |   👥 Known: $knownPeersCount",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            TextButton(
+                                onClick = {
+                                    viewModel.pingAllPeers()
+                                    Toast.makeText(context, "Pinging known peers...", Toast.LENGTH_SHORT).show()
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("🔄 Ping", fontSize = 12.sp)
+                            }
+                        }
+                    }
                     
                     Spacer(modifier = Modifier.height(8.dp))
                     
@@ -117,6 +155,10 @@ fun SettingsScreen(
                             contentDescription = "Contact QR",
                             modifier = Modifier.size(150.dp)
                         )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(onClick = onScanQrClick) {
+                            Text("📷 Scan Peer QR Code")
+                        }
                     }
                     
                     Spacer(modifier = Modifier.height(12.dp))

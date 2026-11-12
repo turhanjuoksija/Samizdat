@@ -237,12 +237,13 @@ fun MainScreen(
                 val rawOnion = json.getString("o")
                 val nick = json.getString("n")
                 val onion = OnionUtils.ensureOnionSuffix(rawOnion)
-                viewModel.savePeer(onion, nick, onion, onion)
-                Toast.makeText(context, "Scanned: $nick", Toast.LENGTH_SHORT).show()
+                viewModel.addManualPeer(onion, nick)
+                Toast.makeText(context, "Scanned & pinged: $nick", Toast.LENGTH_SHORT).show()
                 selectedTab = SamizdatTab.CONTACTS
             } catch (e: Exception) {
-                viewModel.savePeer(content, "Manual", content)
-                Toast.makeText(context, "Scanned: $content", Toast.LENGTH_SHORT).show()
+                val onion = OnionUtils.ensureOnionSuffix(content)
+                viewModel.addManualPeer(onion, "Manual")
+                Toast.makeText(context, "Scanned & pinged: $onion", Toast.LENGTH_SHORT).show()
                 selectedTab = SamizdatTab.CONTACTS
             }
         }
@@ -357,7 +358,8 @@ fun MainScreen(
                     ContactsScreen(
                         viewModel = viewModel,
                         savedPeers = filteredContacts,
-                        onPeerClick = { showMessageDialog = it }
+                        onPeerClick = { showMessageDialog = it },
+                        onScanQrClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }
                     )
                 }
                 SamizdatTab.MAP -> {
@@ -437,7 +439,8 @@ fun MainScreen(
                     onionAddress = onionAddress,
                     torStatus = torStatus,
                     qrBitmap = qrBitmap,
-                    myHash = myHash
+                    myHash = myHash,
+                    onScanQrClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }
                 )
             }
         }

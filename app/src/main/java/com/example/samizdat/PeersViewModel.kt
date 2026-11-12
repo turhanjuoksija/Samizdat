@@ -54,8 +54,41 @@ class PeersViewModel(
         getTorSocksPort = { torManager.socksPort.value },
         sendMessageToPeer = { target, message, socksPort ->
             repository.sendMessage(target, message, socksPort)
+            markPeerAlive(target)
         }
     )
+
+    // ========== LIVE PEERS TRACKING ==========
+    companion object {
+        const val LIVE_PEER_WINDOW_MS = 10 * 60 * 1000L // 10 minutes
+        private const val STATUS_REPLY_COOLDOWN_MS = 60 * 1000L // 1 minute
+    }
+
+    val livePeerTimestamps = androidx.compose.runtime.mutableStateMapOf<String, Long>()
+    private val lastStatusReplyTimestamps = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    fun markPeerAlive(onionOrIp: String?) {
+        if (onionOrIp.isNullOrBlank()) return
+        val clean = OnionUtils.ensureOnionSuffix(onionOrIp)
+        if (!OnionUtils.isOnion(clean)) return
+        if (clean == torManager.onionAddress.value) return
+        livePeerTimestamps[clean] = System.currentTimeMillis()
+        dhtManager.kademliaNode?.addPeer(clean)
+    }
+
+    fun isPeerLive(onionOrIp: String?, nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (onionOrIp.isNullOrBlank()) return false
+        val clean = OnionUtils.ensureOnionSuffix(onionOrIp)
+        val lastHeard = livePeerTimestamps[clean] ?: return false
+        return (nowMs - lastHeard) <= LIVE_PEER_WINDOW_MS
+    }
+
+    fun getLivePeerCount(nowMs: Long = System.currentTimeMillis()): Int {
+        val myOnion = torManager.onionAddress.value
+        return livePeerTimestamps.count { (onion, ts) ->
+            onion != myOnion && (nowMs - ts) <= LIVE_PEER_WINDOW_MS
+        }
+    }
     
     // ========== ROLE & USER STATE ==========
     
@@ -194,6 +227,7 @@ class PeersViewModel(
         dhtManager.getCurrentGridId = { routeManager.myGridId }
         dhtManager.getStoredPeers = { storedPeers.first() }
         dhtManager.savePeerInfo = { onion, nick, pubKey ->
+            markPeerAlive(onion)
             savePeer(
                 lastKnownIp = onion,
                 nickname = nick,
@@ -232,14 +266,18 @@ class PeersViewModel(
                 if (onion != null) {
                     dhtManager.initKademlia(onion)
                     
-                    // Trigger Nostr Bootstrap Discovery if we have no peers
-                    val currentPeers = storedPeers.first()
-                    if (currentPeers.isEmpty()) {
-                        _debugLogs.add(0, "No peers found. Starting Nostr Bootstrap discovery...")
-                        torManager.bootstrapManager.startDiscovery(onion) { discoveredOnions ->
+                    // Ping existing stored peers and run Nostr discovery so new phones are always found
+                    pingAllPeers()
+                    _debugLogs.add(0, "Starting Nostr Bootstrap discovery...")
+                    torManager.bootstrapManager.startDiscovery(onion) { discoveredOnions ->
+                        viewModelScope.launch {
+                            val knownOnions = storedPeers.first().mapNotNull { it.onion }.toSet()
                             discoveredOnions.forEach { discoveredOnion ->
-                                _debugLogs.add(0, "Nostr discovered peer: $discoveredOnion")
-                                addManualPeer(discoveredOnion, "Nostr Peer")
+                                val clean = OnionUtils.ensureOnionSuffix(discoveredOnion)
+                                if (clean !in knownOnions) {
+                                    _debugLogs.add(0, "Nostr discovered peer: $clean")
+                                    addManualPeer(clean, "Nostr Peer")
+                                }
                             }
                         }
                     }
@@ -333,8 +371,10 @@ class PeersViewModel(
                     val newDLon = dest?.second
 
                     val type = json.optString("type", "text")
-                    // optString returns "" if missing, so we check explicit null or empty
-                    val incomingPubKey = json.optString("p", "").takeIf { it.isNotEmpty() }
+                    // "p" carries the RSA public key ONLY in "status" messages; in chat/ride messages "p" is message text!
+                    val incomingPubKey = if (type == "status") {
+                        json.optString("p", "").takeIf { it.isNotEmpty() }
+                    } else null
 
                     // Route DHT messages (validated inside DhtManager)
                     if (type == "dht_store") {
@@ -367,6 +407,7 @@ class PeersViewModel(
                     }
 
                     val lookupId = OnionUtils.ensureOnionSuffix(senderOnion)
+                    markPeerAlive(lookupId)
                     val currentPeers = storedPeers.first()
                     val resolvedPeer = currentPeers.find { it.publicKey == lookupId || it.onion == lookupId }
 
@@ -409,10 +450,25 @@ class PeersViewModel(
                                     val currentSocksPort = torManager.socksPort.value ?: return@launch
                                     try {
                                         repository.sendMessage(targetOnion, cachedUpdate, currentSocksPort)
+                                        markPeerAlive(targetOnion)
                                     } catch (e: Exception) {
                                         // Ignore send failures
                                     }
                                 }
+                            }
+                        }
+
+                        // Reply with our own status (at most once per minute per peer) so single-sided handshakes become bidirectional
+                        val now = System.currentTimeMillis()
+                        val lastReply = lastStatusReplyTimestamps[lookupId] ?: 0L
+                        if (now - lastReply > STATUS_REPLY_COOLDOWN_MS && lookupId != torManager.onionAddress.value) {
+                            lastStatusReplyTimestamps[lookupId] = now
+                            viewModelScope.launch {
+                                val currentSocksPort = torManager.socksPort.value ?: return@launch
+                                try {
+                                    repository.sendMessage(lookupId, getMyStatusPayload(), currentSocksPort)
+                                    markPeerAlive(lookupId)
+                                } catch (_: Exception) { }
                             }
                         }
                     }
@@ -566,6 +622,7 @@ class PeersViewModel(
                     return@launch
                 }
                 repository.sendMessage(peer.lastKnownIp, payload, currentSocksPort)
+                markPeerAlive(peer.onion ?: peer.lastKnownIp)
                 
                 repository.updateMessage(initialMsg.copy(id = msgId, status = "DELIVERED"))
                 _debugLogs.add(0, "OUTBOUND to ${peer.nickname}: DELIVERED")
@@ -648,10 +705,42 @@ class PeersViewModel(
                 delay(500) 
                 val payload = getMyStatusPayload()
                 val currentSocksPort = torManager.socksPort.value ?: return@launch
+                lastStatusReplyTimestamps[cleanOnion] = System.currentTimeMillis()
                 repository.sendMessage(cleanOnion, payload, currentSocksPort)
+                markPeerAlive(cleanOnion)
                 _debugLogs.add(0, "HANDSHAKE: Sent Hello to $localNickname")
             } catch (e: Exception) {
                 _debugLogs.add(0, "HANDSHAKE FAILED: ${e.message}")
+            }
+        }
+    }
+
+    fun pingAllPeers() {
+        viewModelScope.launch {
+            val currentSocksPort = torManager.socksPort.value ?: run {
+                _debugLogs.add(0, "PING: Waiting for Tor SOCKS port...")
+                return@launch
+            }
+            val myOnion = torManager.onionAddress.value
+            val payload = getMyStatusPayload()
+            val peers = storedPeers.first().filter { !it.onion.isNullOrEmpty() && it.onion != myOnion }
+            if (peers.isEmpty()) {
+                _debugLogs.add(0, "PING: No saved peers to ping")
+                return@launch
+            }
+            _debugLogs.add(0, "PING: Checking ${peers.size} known peer(s)...")
+            peers.forEach { peer ->
+                val targetOnion = peer.onion ?: return@forEach
+                launch {
+                    try {
+                        lastStatusReplyTimestamps[targetOnion] = System.currentTimeMillis()
+                        repository.sendMessage(targetOnion, payload, currentSocksPort)
+                        markPeerAlive(targetOnion)
+                        _debugLogs.add(0, "PING OK: ${peer.nickname} is LIVE")
+                    } catch (e: Exception) {
+                        Log.d("PeersViewModel", "Ping failed for ${peer.nickname}: ${e.message}")
+                    }
+                }
             }
         }
     }
@@ -690,6 +779,7 @@ class PeersViewModel(
                         val currentSocksPort = torManager.socksPort.value ?: return@launch
                         try {
                             repository.sendMessage(peer.lastKnownIp, payload, currentSocksPort)
+                            markPeerAlive(peer.onion ?: peer.lastKnownIp)
                             Log.i("PeersViewModel", "Status sent to ${peer.nickname}")
                         } catch (e: Exception) {
                             Log.w("PeersViewModel", "Failed to send status to ${peer.nickname}")

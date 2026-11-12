@@ -21,10 +21,14 @@ import android.location.Location
 fun ContactsScreen(
     viewModel: PeersViewModel,
     savedPeers: List<Peer>,
-    onPeerClick: (Peer) -> Unit
+    onPeerClick: (Peer) -> Unit,
+    onScanQrClick: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var showAddDialog by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    // Observe live peer state changes
+    val livePeersMap = viewModel.livePeerTimestamps.toMap()
+    val nowMs = System.currentTimeMillis()
     
     Box(modifier = Modifier.fillMaxSize()) {
     LazyColumn(
@@ -57,7 +61,15 @@ fun ContactsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(peer.nickname, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                val isLive = peer.onion?.let { onion ->
+                                    val ts = livePeersMap[OnionUtils.ensureOnionSuffix(onion)]
+                                    ts != null && (nowMs - ts) <= PeersViewModel.LIVE_PEER_WINDOW_MS
+                                } ?: false
+                                Text(
+                                    text = if (isLive) "🟢 ${peer.nickname}" else peer.nickname,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "★".repeat(minOf(peer.reputationScore, 5)).ifEmpty { "☆" },
@@ -121,32 +133,79 @@ fun ContactsScreen(
         if (showAddDialog) {
             var manualOnion by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
             var manualNick by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+
+            fun applyPeerInput(raw: String) {
+                val trimmed = raw.trim()
+                if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                    try {
+                        val json = org.json.JSONObject(trimmed)
+                        val o = json.optString("o", "").trim()
+                        val n = json.optString("n", "").trim()
+                        if (o.isNotEmpty()) manualOnion = o
+                        if (n.isNotEmpty() && manualNick.isBlank()) manualNick = n.take(50)
+                        return
+                    } catch (_: Exception) { }
+                }
+                var cleaned = trimmed
+                    .removePrefix("http://")
+                    .removePrefix("https://")
+                    .substringBefore("/")
+                    .replace(Regex("\\s+"), "")
+                if (cleaned.length <= 120) {
+                    manualOnion = cleaned
+                }
+            }
             
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { showAddDialog = false },
                 title = { Text("Add Peer Manually") },
                 text = {
                     Column {
-                        Text("Enter the Onion Address of your friend to ping them.", style = MaterialTheme.typography.bodySmall)
+                        Text("Paste a .onion address (62 chars) or scan a peer's QR code.", style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                    val clipText = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+                                    if (!clipText.isNullOrBlank()) {
+                                        applyPeerInput(clipText)
+                                    } else {
+                                        android.widget.Toast.makeText(context, "Clipboard is empty", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("📋 Paste")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    showAddDialog = false
+                                    onScanQrClick()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("📷 Scan QR")
+                            }
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
                             value = manualOnion,
-                            onValueChange = { input -> 
-                                // FIX: Sanitize paste (remove http://, spaces, etc)
-                                var cleaned = input.trim()
-                                if (cleaned.startsWith("http://")) cleaned = cleaned.removePrefix("http://")
-                                if (cleaned.startsWith("https://")) cleaned = cleaned.removePrefix("https://")
-                                if (cleaned.length <= 60) manualOnion = cleaned 
-                            },
+                            onValueChange = { input -> applyPeerInput(input) },
                             label = { Text("Onion Address") },
-                            singleLine = true
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
                             value = manualNick,
                             onValueChange = { if (it.length <= 50) manualNick = it },
                             label = { Text("Local Nickname") },
-                            singleLine = true
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 },
@@ -154,8 +213,8 @@ fun ContactsScreen(
                     Button(
                         onClick = {
                             val cleanOnion = manualOnion.trim()
-                            val cleanNick = manualNick.trim()
-                            if (cleanOnion.isNotEmpty() && cleanNick.isNotEmpty()) {
+                            val cleanNick = manualNick.trim().ifEmpty { "Peer_${cleanOnion.take(6)}" }
+                            if (cleanOnion.isNotEmpty()) {
                                 viewModel.addManualPeer(cleanOnion, cleanNick)
                                 android.widget.Toast.makeText(context, "Ping sent to $cleanNick!", android.widget.Toast.LENGTH_SHORT).show()
                                 showAddDialog = false

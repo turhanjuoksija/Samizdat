@@ -79,9 +79,12 @@ class DhtManager(
                     baseGrids
                 }
                 
-                if (interestGrids.isNotEmpty()) {
-                    onDebugLog("DHT SYNC: Fetching ${interestGrids.size} grids (Radius: ${getListeningRadius()})")
-                    interestGrids.forEach { gridId ->
+                // If GPS/route grids are not set yet (e.g. indoors), sync all locally stored grids so offers still appear
+                val gridsToSync = interestGrids.ifEmpty { node.getStoredGrids().toList() }
+                
+                if (gridsToSync.isNotEmpty()) {
+                    onDebugLog("DHT SYNC: Fetching ${gridsToSync.size} grids (Radius: ${getListeningRadius()})")
+                    gridsToSync.forEach { gridId ->
                         val messages = node.getLocalMessages(gridId)
                         messages.forEach { msg ->
                             // Deduplicate: if we already have an offer from this driver, only update if newer
@@ -253,13 +256,26 @@ class DhtManager(
             // Trust On First Use (TOFU)
             val existingPeers = getStoredPeers()
             val knownPeer = existingPeers.find { it.onion == senderOnion }
-            if (knownPeer != null && !knownPeer.fullPublicKey.isNullOrEmpty()) {
+            val knownKeyValidRsa = knownPeer?.fullPublicKey?.takeIf { it.isNotEmpty() }?.let { existingKey ->
+                try {
+                    val decoded = java.util.Base64.getDecoder().decode(existingKey)
+                    java.security.KeyFactory.getInstance("RSA")
+                        .generatePublic(java.security.spec.X509EncodedKeySpec(decoded))
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            } ?: false
+
+            if (knownPeer != null && knownKeyValidRsa) {
                 if (knownPeer.fullPublicKey != pubKey) {
                     Log.w("DhtManager", "SPOOF DETECTED: pubKey does not match known identity for $senderOnion")
                     return@launch
                 }
+                // Still mark peer alive / update lastSeen
+                savePeerInfo(senderOnion, senderNick, pubKey)
             } else {
-                // First time seeing this pubKey for this onion
+                // First time seeing this pubKey for this onion (or healing corrupted key)
                 savePeerInfo(senderOnion, senderNick, pubKey)
             }
 
@@ -338,6 +354,13 @@ class DhtManager(
             node.storeLocally(message) // KademliaNode now removes the older ones for us
             onDebugLog("DHT: Received from $senderNick for $gridId (${routeGrids.size} grids)")
             
+            // Immediately surface in gridOffers (deduplicated by senderOnion) so UI updates without waiting for sync loop
+            val latestOffer = _gridOffers.filter { it.senderOnion == senderOnion }.maxByOrNull { it.timestamp }
+            if (latestOffer == null || timestamp >= latestOffer.timestamp) {
+                _gridOffers.removeAll { it.senderOnion == senderOnion }
+                _gridOffers.add(0, message)
+            }
+            
             // Add sender as a known peer
             node.addPeer(senderOnion)
         }
@@ -379,13 +402,19 @@ class DhtManager(
         // Drivers see everything (deduplicated)
         if (role != "PASSENGER") return activeOffers
         
-        val myStart = myGridId ?: return emptyList()
-        val myDest = myDestGridId ?: return emptyList()
+        // If passenger has no GPS/location set yet, show all active offers rather than a blank screen
+        val myStart = myGridId ?: return activeOffers
         
         // Calculate grid radius from walking distance (~2km per grid cell)
         val walkRadius = (maxWalkingDistanceMeters / 2000).coerceIn(0, 2)
-        
         val startArea = RadioGridUtils.getNeighborGrids(myStart, walkRadius).toSet()
+        
+        // If passenger hasn't selected a destination yet, show offers passing near their current location
+        val myDest = myDestGridId ?: return activeOffers.filter { offer ->
+            val routeGridsSet = offer.routeGrids.toSet()
+            if (routeGridsSet.isEmpty()) offer.gridId in startArea else routeGridsSet.any { it in startArea }
+        }
+        
         val destArea = RadioGridUtils.getNeighborGrids(myDest, walkRadius).toSet()
         
         return activeOffers.filter { offer ->
