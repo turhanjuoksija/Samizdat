@@ -2,8 +2,10 @@ package com.example.samizdat
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -24,7 +26,22 @@ class ConnectionManager {
         private const val RATE_LIMIT_WINDOW_MS = 60_000L  // 1 minute
         private const val RATE_LIMIT_MAX_MESSAGES = 30    // per IP per window
         private const val SOCKET_TIMEOUT_MS = 60_000      // idle connection timeout
+        private const val MAX_CONCURRENT_CONNECTIONS = 16 // connections beyond this are dropped immediately
+        private const val MAX_HTTP_LINE = 4_096
+        private const val MAX_HTTP_HEADER_BYTES = 8_192
+        private const val MAX_HTTP_HEADERS = 50
     }
+
+    // Bounds the number of simultaneously handled connections (a long APK upload must not block messaging,
+    // but unlimited concurrency would be a DoS vector).
+    private val connectionSlots = java.util.concurrent.Semaphore(MAX_CONCURRENT_CONNECTIONS)
+
+    /**
+     * Handler for plain HTTP GET requests on the onion service (used to serve update APKs, §20).
+     * Receives the request line, lower-cased headers and the socket. Null = respond 404.
+     */
+    @Volatile
+    var httpHandler: (suspend (requestLine: String, headers: Map<String, String>, socket: Socket) -> Unit)? = null
 
     // Track message counts per IP for rate limiting
     // (Removed: IP rate limiting is ineffective/harmful when all traffic comes from localhost 127.0.0.1 via Tor)
@@ -41,15 +58,26 @@ class ConnectionManager {
             isRunning = true
             Log.i(TAG, "Server started and listening on port $port")
             
-            while (isRunning) {
-                try {
-                    val clientSocket = serverSocket?.accept()
-                    Log.i(TAG, "New connection accepted from: ${clientSocket?.inetAddress?.hostAddress}")
-                    clientSocket?.let { socket ->
-                        handleClient(socket)
+            coroutineScope {
+                while (isRunning) {
+                    try {
+                        val clientSocket = serverSocket?.accept() ?: break
+                        if (!connectionSlots.tryAcquire()) {
+                            Log.w(TAG, "Too many concurrent connections, dropping new one")
+                            try { clientSocket.close() } catch (_: Exception) { }
+                            continue
+                        }
+                        // Handle each client concurrently so a long-running transfer does not block others
+                        launch {
+                            try {
+                                handleClient(clientSocket)
+                            } finally {
+                                connectionSlots.release()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        if (isRunning) Log.e(TAG, "Error accepting connection", e)
                     }
-                } catch (e: Exception) {
-                    if (isRunning) Log.e(TAG, "Error accepting connection", e)
                 }
             }
         } catch (e: Exception) {
@@ -60,8 +88,24 @@ class ConnectionManager {
     private suspend fun handleClient(socket: Socket) = withContext(Dispatchers.IO) {
         try {
             socket.soTimeout = SOCKET_TIMEOUT_MS
+            val inputStream = java.io.BufferedInputStream(socket.getInputStream())
+
+            // Peek at the first bytes: "GET " = HTTP request (update download), otherwise JSON-line protocol
+            inputStream.mark(8)
+            val prefix = ByteArray(4)
+            var prefixLen = 0
+            while (prefixLen < 4) {
+                val r = inputStream.read(prefix, prefixLen, 4 - prefixLen)
+                if (r == -1) break
+                prefixLen += r
+            }
+            inputStream.reset()
+            if (prefixLen == 4 && String(prefix, Charsets.US_ASCII) == "GET ") {
+                handleHttpRequest(socket, inputStream)
+                return@withContext
+            }
+
             // Use explicit UTF-8 encoding for streams
-            val inputStream = socket.getInputStream()
             val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
             val writer = PrintWriter(socket.getOutputStream().writer(Charsets.UTF_8), true)
             val senderIp = socket.inetAddress.hostAddress ?: "Unknown"
@@ -99,6 +143,46 @@ class ConnectionManager {
     }
 
     // IP-based checkRateLimit removed
+
+    /** Reads an HTTP request head (bounded) and passes it to [httpHandler]. */
+    private suspend fun handleHttpRequest(socket: Socket, input: java.io.InputStream) {
+        val requestLine = readAsciiLine(input) ?: return
+        val headers = mutableMapOf<String, String>()
+        var total = requestLine.length
+        while (true) {
+            val line = readAsciiLine(input) ?: return
+            if (line.isEmpty()) break
+            total += line.length
+            if (total > MAX_HTTP_HEADER_BYTES || headers.size >= MAX_HTTP_HEADERS) {
+                Log.w(TAG, "HTTP request head too large, dropping")
+                return
+            }
+            val idx = line.indexOf(':')
+            if (idx > 0) headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
+        }
+        Log.i(TAG, "HTTP request: ${requestLine.take(100)}")
+        val handler = httpHandler
+        if (handler == null) {
+            val out = socket.getOutputStream()
+            out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+            out.flush()
+            return
+        }
+        handler(requestLine, headers, socket)
+    }
+
+    /** Reads one CRLF/LF-terminated ASCII line, or null on EOF / over-long line. */
+    private fun readAsciiLine(input: java.io.InputStream): String? {
+        val sb = StringBuilder()
+        while (true) {
+            val b = input.read()
+            if (b == -1) return null
+            if (b == '\n'.code) break
+            if (b != '\r'.code) sb.append(b.toChar())
+            if (sb.length > MAX_HTTP_LINE) return null
+        }
+        return sb.toString()
+    }
 
     suspend fun sendMessage(ip: String, port: Int, message: String, socksPort: Int) = withContext(Dispatchers.IO) {
         val finalIp = OnionUtils.ensureOnionSuffix(ip)

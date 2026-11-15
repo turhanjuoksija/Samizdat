@@ -29,12 +29,14 @@ samizdat_dev_key
 samizdat_dev_key.pub
 *.jks
 *.keystore
+keystore.properties
 
 # Temporary files
 *.log
 *.tmp
 
-# Large Media / Assets
+# Large Media / Assets / Binaries
 video/
+*.apk
 publish_update.sh
 nak

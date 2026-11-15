@@ -1,4 +1,12 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
+
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) {
+        keystorePropsFile.inputStream().use { load(it) }
+    }
+}
 
 plugins {
     id("com.android.application")
@@ -21,8 +29,8 @@ android {
         applicationId = "com.example.samizdat"
         minSdk = 26 // Supporting back to Android 8.0
         targetSdk = 34
-        versionCode = 19 // Tor 0.4.9.14 via tor-android (was kmp-tor 0.4.8.13), AGP 9 toolchain
-        versionName = "0.7-alpha"
+        versionCode = 20 // P2P signed APK seeding (3-lock model) + QR/paste/DHT fixes
+        versionName = "0.7.1-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -35,12 +43,27 @@ android {
         }
     }
 
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Sign with debug key for alpha testing (produces installable APK)
-            signingConfig = signingConfigs.getByName("debug")
+            // Uses dedicated release keystore if keystore.properties exists; falls back to debug key
+            signingConfig = if (keystorePropsFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {

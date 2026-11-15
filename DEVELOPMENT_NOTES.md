@@ -184,3 +184,15 @@ Syy: kmp-torin Tor oli 0.4.8.13 (EOL 1.6.2026, konsensus ei enää suosittele). 
 - **Käännösympäristö** päivitetty samassa yhteydessä (§11): AGP 9.4.1, Gradle 9.8.2, Kotlin 2.3.21, Room 2.8.5, Compose BOM 2026.09.00, compile SDK 37.1.
 - **kapt & Java 24 -gotcha (ks. §1 & §2)**: `TorService`-tyyppi pidetty pois kenttien/metodien tyypeistä (kapt JDK 17 ei lue class 68 -tavukoodia). Kotlin lukittu 2.3.x Room 2.8.5 -kaptin metadatarajoituksen vuoksi. Pysyvä ratkaisu myöhemmin: Room → KSP.
 - **Tila & Testaus**: Käännökset (`assembleDebug`, `assembleRelease`) OK. Testattu laitteella (Nokia X30 5G, Android 14): .onion-osoite säilyi identtisenä vanhan kmp-tor-asennuksen (build 17) päälle päivitettäessä, Tor 0.4.9.14 yhdisti verkkoon ja loi hidden servicen. Back-napin jälkeinen uudelleenkäynnistys samassa prosessissa testattu ja toimii 5 s varoajan ansiosta. Seuraavaksi: 2-laitteen P2P-viestintätesti.
+
+## 20. P2P Signed App Update Seeding (3-Lock Model & DoS Quotas) - 13.11.2026 🔄🛡️
+Päivitetty P2P-päivitysarkkitehtuuri niin, että puhelimet jakavat itse asennettua APK-tiedostoaan (`applicationInfo.sourceDir` / `base.apk`) suoraan toisilleen Tor-verkon yli ilman, että kehittäjän läppäriä tarvitsee pitää päällä.
+- **Kolmen lukon turvamalli (`UpdateManifest.kt` + `UpdateManager.kt`)**:
+  1. **Lukko 1 (Ennen latausta)**: Kehittäjän RSA-allekirjoitus `sig2` (`UPDATE2:<pkg>:<ver>:<size>:<sha256>`) ja `sig` (`UPDATE:<ver>:<sha256>`) tarkistetaan **ennen kuin yhtään tavua ladataan tai välitetään eteenpäin**. Estää väärennetyillä Nostr/gossip-viesteillä pakotetut turhat lataukset ja versiolukitukset.
+  2. **Lukko 2 (Latauksen aikana ja jälkeen)**: Lataus katkeaa välittömästi, jos koko ylittää allekirjoitetun `size`-arvon, ja valmiin tiedoston SHA-256-tiivisteen on täsmättävä `sha256`-kenttään. Tukee jatkolatausta (`HTTP Range`).
+  3. **Lukko 3 (Ennen asennusta)**: Ladatun APK:n allekirjoitusvarmenteen (`getPackageArchiveInfo`) on täsmättävä asennetun sovelluksen varmenteeseen, ja lataus sekä asennus vaativat aina käyttäjän kuittauksen UI-dialogissa.
+- **Itsenäinen P2P-jakaja (`ApkSeeder.kt` + `ConnectionManager.kt`)**:
+  - Kun puhelin vastaanottaa oman asennetun versionsa allekirjoitetun manifestin (Nostrista tai vertaiselta), se tarkistaa oman `base.apk`-tiedostonsa koon ja SHA-256-tiivisteen. Jos ne täsmäävät, puhelin alkaa jakaa APK:ta osoitteestaan `http://<oma-onion>.onion/update_v<ver>.apk`.
+  - **DoS-rajoitukset**: Koska kaikki Tor-liikenne saapuu osoitteesta `127.0.0.1`, rajoitukset ovat globaaleja per jakaja: max **1 samanaikainen lähetys**, max **4 lähetystä tunnissa**, max **150 Mt / 24 h**, max 20 min per lähetys, ja oletuksena vain **Wi-Fi/mittaamaton verkko + akku >= 30 % (tai laturissa)**. Manifestien gossip on rajoitettu max 1 kertaan per vertainen per tunti.
+- **Release Keystore (`keystore.properties`)**:
+  - `app/build.gradle.kts` käyttää omaa release-keystorea, jos projektin juuressa on `keystore.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`), ja muuten varalla debug-avainta. Säilytä `private_rsa.pem` ja release-keystore erillään ja varmuuskopioituina!

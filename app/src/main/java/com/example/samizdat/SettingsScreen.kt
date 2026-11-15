@@ -370,6 +370,118 @@ fun SettingsScreen(
             }
         }
 
+        // App Updates & P2P Seeding Section (Phase C)
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("App Updates & P2P Seeding 🔄", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val seeder = viewModel.apkSeeder
+                    val seederStatus by seeder.status.collectAsState()
+                    val seederStats by seeder.stats.collectAsState()
+                    val sharingEnabled by seeder.sharingEnabled.collectAsState()
+                    val allowMetered by seeder.allowMetered.collectAsState()
+
+                    val availableUpdate by viewModel.availableUpdate.collectAsState()
+                    val updateUiState by viewModel.updateUiState.collectAsState()
+                    val updateSources by viewModel.updateSourceCount.collectAsState()
+
+                    Text(seederStatus, style = MaterialTheme.typography.bodySmall, color = Color.DarkGray)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    val mbToday = seederStats.bytesToday / (1024 * 1024)
+                    val maxMb = ApkSeeder.DAILY_BYTE_BUDGET / (1024 * 1024)
+                    Text(
+                        text = "Quota: ${seederStats.uploadsLastHour}/${ApkSeeder.MAX_UPLOADS_PER_HOUR} uploads this hour  •  $mbToday/$maxMb MB today" +
+                            if (seederStats.uploading) "  •  📤 Uploading..." else "",
+                        fontSize = 11.sp,
+                        color = Color.Gray
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text("Share verified APK with peers", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                        Switch(checked = sharingEnabled, onCheckedChange = { seeder.setSharingEnabled(it) })
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text("Allow sharing on mobile data", style = MaterialTheme.typography.bodySmall, color = Color.DarkGray, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = allowMetered,
+                            onCheckedChange = { seeder.setAllowMetered(it) },
+                            enabled = sharingEnabled
+                        )
+                    }
+
+                    // Show update download / install controls if a newer release is known
+                    if (availableUpdate != null) {
+                        val m = availableUpdate!!
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val sizeMb = "%.1f".format(m.size / (1024.0 * 1024.0))
+                        Text(
+                            "New release available: v${m.version} ($sizeMb MB, $updateSources peer source(s))",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        when (val st = updateUiState) {
+                            is PeersViewModel.UpdateUiState.Downloading -> {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                val pct = if (st.bytesTotal > 0) st.bytesDone.toFloat() / st.bytesTotal else 0f
+                                LinearProgressIndicator(progress = pct, modifier = Modifier.fillMaxWidth())
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "Downloading over Tor: ${st.bytesDone / (1024 * 1024)} / ${st.bytesTotal / (1024 * 1024)} MB",
+                                        fontSize = 11.sp, color = Color.DarkGray
+                                    )
+                                    TextButton(onClick = { viewModel.cancelUpdateDownload() }) {
+                                        Text("Cancel", color = Color(0xFFB00020))
+                                    }
+                                }
+                            }
+                            is PeersViewModel.UpdateUiState.ReadyToInstall -> {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text("Signature, SHA-256 & APK certificate verified ✅", fontSize = 12.sp, color = Color(0xFF2E7D32))
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Button(onClick = { viewModel.installDownloadedUpdate() }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Install v${st.manifest.version} Now")
+                                }
+                            }
+                            is PeersViewModel.UpdateUiState.Failed -> {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("Error: ${st.message}", fontSize = 11.sp, color = Color(0xFFB00020))
+                                Spacer(modifier = Modifier.height(4.dp))
+                                OutlinedButton(
+                                    onClick = { viewModel.downloadAvailableUpdate() },
+                                    enabled = updateSources > 0,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Retry Download")
+                                }
+                            }
+                            is PeersViewModel.UpdateUiState.Idle -> {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Button(
+                                    onClick = { viewModel.downloadAvailableUpdate() },
+                                    enabled = updateSources > 0,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(if (updateSources > 0) "Download v${m.version} over Tor" else "Waiting for a peer source...")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Debug Logs
         item {
             Card(

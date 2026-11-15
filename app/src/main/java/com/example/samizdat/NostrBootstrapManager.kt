@@ -292,20 +292,25 @@ class NostrBootstrapManager(private val context: Context) {
     }
 
     /**
-     * Connects to Nostr relays and subscribes to app update events (Kind 10338)
+     * Connects to Nostr relays and subscribes to app update events (Kind 10338).
+     *
+     * Every event is converted to the gossip manifest JSON (ver/url/sig/sha256/size/sig2) and passed to
+     * [onManifest], including events for the currently installed version (needed to start seeding).
+     * The Schnorr check only proves *someone* published the event; the caller MUST verify the
+     * developer signatures in the manifest (DEVELOPMENT_NOTES §20) before acting on it.
      */
-    fun checkForUpdates(currentVersion: Int, onUpdateFound: (Int, String, String) -> Unit) {
+    fun checkForUpdates(onManifest: (JSONObject) -> Unit) {
         scope.launch {
             Log.i(TAG, "Starting Nostr discovery for app updates...")
 
-            // Calculate cutoff time (e.g., look for updates in the last 7 days)
-            val sinceTimestamp = (System.currentTimeMillis() / 1000) - (7 * 24 * 60 * 60)
+            // Look back 30 days so a phone that installed a release via WhatsApp/e-mail can still find its manifest
+            val sinceTimestamp = (System.currentTimeMillis() / 1000) - (30 * 24 * 60 * 60)
 
             // Create NIP-01 Subscription filter for UPDATE events
             val filter = JSONObject().apply {
                 put("kinds", JSONArray().put(UPDATE_KIND))
                 put("since", sinceTimestamp)
-                put("limit", 10) // We only need the latest few
+                put("limit", 50)
             }
 
             val subId = "samizdat_updates_${System.currentTimeMillis()}"
@@ -316,7 +321,7 @@ class NostrBootstrapManager(private val context: Context) {
             }.toString()
 
             for (relayUrl in defaultRelays) {
-                val connected = connectAndSubscribeToUpdates(relayUrl, subscribeMessage, currentVersion, onUpdateFound)
+                val connected = connectAndSubscribeToUpdates(relayUrl, subscribeMessage, onManifest)
                 if (connected) {
                     break // Connecting to one relay to fetch broadcasts is usually enough
                 }
@@ -327,8 +332,7 @@ class NostrBootstrapManager(private val context: Context) {
     private suspend fun connectAndSubscribeToUpdates(
         url: String, 
         subscribeMessage: String, 
-        currentVersion: Int,
-        onUpdateFound: (Int, String, String) -> Unit
+        onManifest: (JSONObject) -> Unit
     ): Boolean {
         var isConnected = false
         val request = Request.Builder().url(url).build()
@@ -347,14 +351,13 @@ class NostrBootstrapManager(private val context: Context) {
                     
                     if (type == "EVENT") {
                         val eventJson = message.getJSONObject(2) // ["EVENT", "subId", {event}]
-                        handleIncomingUpdateEvent(eventJson, currentVersion, onUpdateFound, webSocket)
+                        handleIncomingUpdateEvent(eventJson, onManifest)
                     } else if (type == "EOSE") {
                         Log.d(TAG, "Reached EOSE for updates on $url")
-                        // Leave the socket open briefly to ensure we process late arrivals, then we could close it.
-                        // For now we'll just let it disconnect naturally or stay open.
+                        webSocket.close(1000, "Done")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error parsing Nostr update message: $text", e)
+                    Log.e(TAG, "Error parsing Nostr update message", e)
                 }
             }
 
@@ -371,9 +374,7 @@ class NostrBootstrapManager(private val context: Context) {
 
     private fun handleIncomingUpdateEvent(
         eventJson: JSONObject, 
-        currentVersion: Int, 
-        onUpdateFound: (Int, String, String) -> Unit,
-        webSocket: WebSocket
+        onManifest: (JSONObject) -> Unit
     ) {
         val kind = eventJson.optInt("kind", 0)
         if (kind != UPDATE_KIND) return
@@ -384,32 +385,27 @@ class NostrBootstrapManager(private val context: Context) {
             return
         }
 
-        var version = -1
-        var url = ""
-        var sig = ""
-
+        val manifest = JSONObject()
         val tags = eventJson.optJSONArray("tags")
         if (tags != null) {
             for (i in 0 until tags.length()) {
                 val tagArray = tags.optJSONArray(i)
                 if (tagArray != null && tagArray.length() >= 2) {
-                    val key = tagArray.getString(0)
-                    val value = tagArray.getString(1)
+                    val key = tagArray.optString(0)
+                    val value = tagArray.optString(1)
                     when (key) {
-                        "samizdat_ver" -> version = value.toIntOrNull() ?: -1
-                        "samizdat_url" -> url = value
-                        "samizdat_sig" -> sig = value
+                        "samizdat_ver" -> manifest.put("ver", value.toIntOrNull() ?: -1)
+                        "samizdat_url" -> manifest.put("url", value)
+                        "samizdat_sig" -> manifest.put("sig", value)
+                        "samizdat_sha256" -> manifest.put("sha256", value)
+                        "samizdat_size" -> manifest.put("size", value.toLongOrNull() ?: -1L)
+                        "samizdat_sig2" -> manifest.put("sig2", value)
                     }
                 }
             }
         }
-
-        // We only care if it's strictly newer
-        if (version > currentVersion && url.isNotEmpty() && sig.isNotEmpty()) {
-            Log.i(TAG, "Found App Update via Nostr! v$version at $url")
-            onUpdateFound(version, url, sig)
-            // Can close the socket since we found what we wanted
-            webSocket.close(1000, "Update found")
+        if (manifest.optInt("ver", -1) > 0) {
+            onManifest(manifest)
         }
     }
 

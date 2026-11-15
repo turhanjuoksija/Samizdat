@@ -8,6 +8,8 @@ import android.util.Log
 import android.net.nsd.NsdServiceInfo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -31,7 +33,8 @@ class PeersViewModel(
     private val repository: PeerRepository,
     val torManager: SamizdatTorManager,
     val updateManager: UpdateManager,
-    val segmentManager: SegmentManager
+    val segmentManager: SegmentManager,
+    val apkSeeder: ApkSeeder
 ) : ViewModel() {
     
     // ========== MANAGERS ==========
@@ -62,6 +65,8 @@ class PeersViewModel(
     companion object {
         const val LIVE_PEER_WINDOW_MS = 10 * 60 * 1000L // 10 minutes
         private const val STATUS_REPLY_COOLDOWN_MS = 60 * 1000L // 1 minute
+        private const val UPDATE_GOSSIP_COOLDOWN_MS = 60 * 60 * 1000L // 1 hour per peer
+        private const val MAX_UPDATE_SOURCES = 20
     }
 
     val livePeerTimestamps = androidx.compose.runtime.mutableStateMapOf<String, Long>()
@@ -199,9 +204,34 @@ class PeersViewModel(
     val torOnionAddress = torManager.onionAddress
     val isTorBootstrapped = torManager.isBootstrapped
 
-    // ========== APP UPDATE GOSSIP STATE ==========
-    private var cachedUpdateJson: String? = null
-    private var highestGossipedVersion: Int = updateManager.currentVersionCode
+    // ========== APP UPDATE (P2P, signed manifests - DEVELOPMENT_NOTES §20) ==========
+
+    sealed class UpdateUiState {
+        object Idle : UpdateUiState()
+        data class Downloading(val bytesDone: Long, val bytesTotal: Long) : UpdateUiState()
+        data class ReadyToInstall(val manifest: UpdateManifest, val filePath: String) : UpdateUiState()
+        data class Failed(val message: String) : UpdateUiState()
+    }
+
+    /** Newer release whose developer signatures have been verified (not yet downloaded). */
+    private val _availableUpdate = MutableStateFlow<UpdateManifest?>(null)
+    val availableUpdate: StateFlow<UpdateManifest?> = _availableUpdate.asStateFlow()
+
+    private val _updateUiState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
+    val updateUiState: StateFlow<UpdateUiState> = _updateUiState.asStateFlow()
+
+    /** Version for which the user tapped "Later" in the update dialogs. */
+    var updateDialogDismissedVersion by mutableIntStateOf(0)
+    var installDialogDismissedVersion by mutableIntStateOf(0)
+
+    /** Known download sources per version (unsigned hints; content is pinned by the signed hash). */
+    private val updateSources = java.util.concurrent.ConcurrentHashMap<Int, MutableSet<String>>()
+    private val _updateSourceCount = MutableStateFlow(0)
+    val updateSourceCount: StateFlow<Int> = _updateSourceCount.asStateFlow()
+
+    /** Last time we sent an update announcement to a peer (max 1 per peer per hour). */
+    private val lastUpdateGossip = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private var updateDownloadJob: kotlinx.coroutines.Job? = null
 
     // ========== INITIALIZATION ==========
 
@@ -213,6 +243,17 @@ class PeersViewModel(
             torManager.startTor()
         } catch (e: Throwable) {
             Log.e("PeersViewModel", "Error in init", e)
+        }
+
+        // Restore the last verified release manifest: seed it if it is our installed version,
+        // or offer it again if it is newer. Re-verified because SharedPreferences are not a trust anchor.
+        viewModelScope.launch {
+            val stored = updateManager.loadStoredManifest() ?: return@launch
+            if (stored.version < updateManager.currentVersionCode) return@launch
+            val valid = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                stored.verify(updateManager.packageName)
+            }
+            if (valid) acceptVerifiedManifest(stored)
         }
         
         // Setup manager callbacks
@@ -282,12 +323,9 @@ class PeersViewModel(
                         }
                     }
 
-                    // Always check for App Updates via Nostr in the background
-                    torManager.bootstrapManager.checkForUpdates(updateManager.currentVersionCode) { version, url, sig ->
-                        if (version > highestGossipedVersion) {
-                            _debugLogs.add(0, "NOSTR UPDATE: Initiating gossip for v$version")
-                            broadcastAppUpdate(version, url, sig)
-                        }
+                    // Always check for App Updates via Nostr in the background (manifests are verified in handleUpdateMessage)
+                    torManager.bootstrapManager.checkForUpdates { manifestJson ->
+                        viewModelScope.launch { handleUpdateMessage(manifestJson) }
                     }
                 }
             }
@@ -388,7 +426,8 @@ class PeersViewModel(
                     }
 
                     if (type == "APP_UPDATE") {
-                        handleUpdateMessage(json)
+                        // Verify off the message-collector path (may hash the installed APK when seeding)
+                        viewModelScope.launch { handleUpdateMessage(json) }
                         return
                     }
 
@@ -438,24 +477,12 @@ class PeersViewModel(
                         savePeer(lookupId, senderNick ?: "Unknown", lookupId, lookupId, newRole, newSeats, newInfo, newLat, newLon, newDLat, newDLon, incomingPubKey)
                     }
 
-                    // Auto-Gossip App Updates based on peer's reported version
+                    // Announce a newer signed release to peers running an older version (rate limited)
                     if (type == "status") {
                         val peerAppVersion = json.optInt("app_v", 0)
-                        val cachedUpdate = cachedUpdateJson
-                        if (peerAppVersion in 1 until updateManager.currentVersionCode && cachedUpdate != null) {
-                            val targetOnion = resolvedPeer?.onion ?: if (OnionUtils.isOnion(lookupId)) lookupId else null
-                            if (targetOnion != null) {
-                                _debugLogs.add(0, "GOSSIP: Pushing update to ${senderNick ?: targetOnion} (they have v$peerAppVersion)")
-                                viewModelScope.launch {
-                                    val currentSocksPort = torManager.socksPort.value ?: return@launch
-                                    try {
-                                        repository.sendMessage(targetOnion, cachedUpdate, currentSocksPort)
-                                        markPeerAlive(targetOnion)
-                                    } catch (e: Exception) {
-                                        // Ignore send failures
-                                    }
-                                }
-                            }
+                        val targetOnion = resolvedPeer?.onion ?: if (OnionUtils.isOnion(lookupId)) lookupId else null
+                        if (targetOnion != null) {
+                            maybeGossipUpdate(targetOnion, peerAppVersion, senderNick)
                         }
 
                         // Reply with our own status (at most once per minute per peer) so single-sided handshakes become bidirectional
@@ -987,73 +1014,149 @@ class PeersViewModel(
         }
     }
 
-    private fun handleUpdateMessage(json: org.json.JSONObject) {
-        val version = json.optInt("ver", -1)
-        val url = json.optString("url", "")
-        val sig = json.optString("sig", "")
-        
-        // Validate URL format
-        if (!MessageValidator.isValidUpdateUrl(url)) {
-            Log.w("PeersViewModel", "Update rejected: invalid URL format")
+    /**
+     * Handles an update announcement from a peer (gossip) or from Nostr.
+     *
+     * Lock 1: nothing is downloaded, stored or relayed unless BOTH developer signatures are valid.
+     * Legacy announcements (no sha256/size/sig2) cannot be verified before download and are ignored.
+     * State is only updated AFTER verification, so a forged "v999999" can no longer block real updates.
+     */
+    private suspend fun handleUpdateMessage(json: org.json.JSONObject) {
+        val manifest = UpdateManifest.fromJson(json)
+        if (manifest == null) {
+            Log.w("PeersViewModel", "Ignored unsigned/legacy update announcement (v${json.optInt("ver", -1)})")
             return
         }
 
-        if (version <= highestGossipedVersion) {
-            return // Prevent duplicate downloads and infinite gossip loops
+        // Already-verified release: just remember the extra source (no repeated RSA work)
+        val known = listOfNotNull(_availableUpdate.value, apkSeeder.seedManifest.value)
+            .firstOrNull { it.sameReleaseAs(manifest) }
+        if (known != null) {
+            addUpdateSource(known.version, manifest.url)
+            return
         }
 
-        // Immediately update state so we don't process redundant packets
-        highestGossipedVersion = version
+        val valid = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            manifest.verify(updateManager.packageName)
+        }
+        if (!valid) {
+            _debugLogs.add(0, "UPDATE: REJECTED v${manifest.version} announcement (invalid developer signature)")
+            return
+        }
+        acceptVerifiedManifest(manifest)
+    }
 
-        val currentVersion = updateManager.currentVersionCode
-
-        if (version > 0 && url.isNotEmpty() && sig.isNotEmpty() && version > currentVersion) {
-            _debugLogs.add(0, "UPDATE: v$version available (current: v$currentVersion). Downloading...")
-            viewModelScope.launch {
-                try {
-                    // This internally verifies the developer signature
-                    updateManager.downloadAndInstall(url, sig, version)
-                    
-                    _debugLogs.add(0, "UPDATE: Install Prompted! Caching payload for gossip.")
-                    
-                    // If we get here, signature matched and download succeeded
-                    cachedUpdateJson = json.toString()
-                    
-                    // Re-broadcast to all our peers
-                    val currentSocksPort = torManager.socksPort.value ?: return@launch
-                    val peers = storedPeers.first()
-                    var gossipCount = 0
-                    peers.forEach { peer ->
-                        if (!peer.onion.isNullOrEmpty()) {
-                            launch {
-                                try {
-                                    repository.sendMessage(peer.onion, cachedUpdateJson!!, currentSocksPort)
-                                    gossipCount++
-                                } catch (e: Exception) {
-                                    // Ignore individual peer send failures
-                                }
-                            }
-                        }
-                    }
-                    _debugLogs.add(0, "GOSSIP: Pushed update to $gossipCount peers")
-                } catch (e: Exception) {
-                    _debugLogs.add(0, "UPDATE ERROR: ${e.message}")
+    /** Called only with signature-verified manifests. */
+    private suspend fun acceptVerifiedManifest(manifest: UpdateManifest) {
+        val current = updateManager.currentVersionCode
+        addUpdateSource(manifest.version, manifest.url)
+        when {
+            manifest.version == current -> {
+                // Our installed release: start seeding if the installed APK is byte-identical
+                val stored = updateManager.loadStoredManifest()
+                if (stored == null || stored.version <= manifest.version) updateManager.storeManifest(manifest)
+                if (apkSeeder.offerSelf(manifest)) {
+                    _debugLogs.add(0, "UPDATE: Sharing own v${manifest.version} with peers (signed release verified)")
+                } else {
+                    _debugLogs.add(0, "UPDATE: Not sharing v${manifest.version}: ${apkSeeder.status.value}")
                 }
+            }
+            manifest.version > current -> {
+                val existing = _availableUpdate.value
+                if (existing == null || manifest.version > existing.version) {
+                    _availableUpdate.value = manifest
+                    updateManager.storeManifest(manifest)
+                    _updateSourceCount.value = updateSources[manifest.version]?.size ?: 0
+                    _debugLogs.add(0, "UPDATE: v${manifest.version} available (developer signature verified ✅)")
+                }
+            }
+            else -> { /* older than installed: ignore (downgrade protection) */ }
+        }
+    }
+
+    private fun addUpdateSource(version: Int, url: String?) {
+        if (url.isNullOrBlank() || !MessageValidator.isValidUpdateUrl(url)) return
+        // Never use ourselves as a download source
+        val myOnion = torManager.onionAddress.value
+        if (myOnion != null && url.contains(myOnion)) return
+        val set = updateSources.getOrPut(version) { java.util.Collections.synchronizedSet(LinkedHashSet()) }
+        if (set.size < MAX_UPDATE_SOURCES || url in set) set.add(url)
+        if (_availableUpdate.value?.version == version) _updateSourceCount.value = set.size
+    }
+
+    /**
+     * Sends our best known signed release to a peer that reports an older version.
+     * Max once per peer per hour. If we seed the release ourselves, our own onion is the source.
+     * The message stays readable by older app versions (ver/url/sig).
+     */
+    private fun maybeGossipUpdate(peerOnion: String, peerAppVersion: Int, peerNick: String?) {
+        if (peerAppVersion <= 0) return
+        val myOnion = torManager.onionAddress.value ?: return
+        if (peerOnion == myOnion) return
+
+        val seed = apkSeeder.seedManifest.value
+        val available = _availableUpdate.value
+        val (manifest, sourceUrl) = when {
+            available != null && (seed == null || available.version > seed.version) ->
+                available to updateSources[available.version]?.toList()?.randomOrNull()
+            seed != null -> seed to UpdateManifest.sourceUrlFor(myOnion, seed.version)
+            else -> return
+        }
+        if (sourceUrl == null || peerAppVersion >= manifest.version) return
+
+        val now = System.currentTimeMillis()
+        val last = lastUpdateGossip[peerOnion] ?: 0L
+        if (now - last < UPDATE_GOSSIP_COOLDOWN_MS) return
+        lastUpdateGossip[peerOnion] = now
+
+        viewModelScope.launch {
+            val socksPort = torManager.socksPort.value ?: return@launch
+            try {
+                repository.sendMessage(peerOnion, manifest.toGossipJson(sourceUrl), socksPort)
+                markPeerAlive(peerOnion)
+                _debugLogs.add(0, "GOSSIP: Announced signed v${manifest.version} to ${peerNick ?: peerOnion.take(12)} (they have v$peerAppVersion)")
+            } catch (_: Exception) {
+                lastUpdateGossip.remove(peerOnion)
             }
         }
     }
 
-    private fun broadcastAppUpdate(version: Int, url: String, signature: String) {
-        val jsonPayload = org.json.JSONObject().apply {
-            put("v", 1)
-            put("type", "APP_UPDATE")
-            put("ver", version)
-            put("url", url)
-            put("sig", signature)
-        }.toString()
+    /** User accepted: download from peers (one source at a time) and verify (size, SHA-256, certificate). */
+    fun downloadAvailableUpdate() {
+        val manifest = _availableUpdate.value ?: return
+        if (updateDownloadJob?.isActive == true) return
+        val sources = updateSources[manifest.version]?.toList()?.shuffled().orEmpty()
+        if (sources.isEmpty()) {
+            _updateUiState.value = UpdateUiState.Failed("No peer is sharing v${manifest.version} yet. Try again later.")
+            return
+        }
+        updateDownloadJob = viewModelScope.launch {
+            _updateUiState.value = UpdateUiState.Downloading(0, manifest.size)
+            _debugLogs.add(0, "UPDATE: Downloading v${manifest.version} over Tor (${sources.size} source(s))...")
+            try {
+                val file = updateManager.downloadVerified(manifest, sources) { done, total ->
+                    _updateUiState.value = UpdateUiState.Downloading(done, total)
+                }
+                _updateUiState.value = UpdateUiState.ReadyToInstall(manifest, file.absolutePath)
+                _debugLogs.add(0, "UPDATE: v${manifest.version} verified ✅ (signature, SHA-256, certificate). Ready to install.")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                _updateUiState.value = UpdateUiState.Idle
+                throw e
+            } catch (e: Exception) {
+                _updateUiState.value = UpdateUiState.Failed(e.message ?: "Download failed")
+                _debugLogs.add(0, "UPDATE ERROR: ${e.message}")
+            }
+        }
+    }
 
-        // Treat our own broadcast just like receiving an update to leverage the same caching/gossip loop
-        handleUpdateMessage(org.json.JSONObject(jsonPayload))
+    fun cancelUpdateDownload() {
+        updateDownloadJob?.cancel()
+        _updateUiState.value = UpdateUiState.Idle
+    }
+
+    fun installDownloadedUpdate() {
+        val state = _updateUiState.value as? UpdateUiState.ReadyToInstall ?: return
+        updateManager.installApk(java.io.File(state.filePath))
     }
 
     // ========== OFFLINE ROUTING DATA ==========
@@ -1125,12 +1228,13 @@ class PeersViewModelFactory(
     private val repository: PeerRepository, 
     private val torManager: SamizdatTorManager,
     private val updateManager: UpdateManager,
-    private val segmentManager: SegmentManager
+    private val segmentManager: SegmentManager,
+    private val apkSeeder: ApkSeeder
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(PeersViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return PeersViewModel(repository, torManager, updateManager, segmentManager) as T
+            return PeersViewModel(repository, torManager, updateManager, segmentManager, apkSeeder) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

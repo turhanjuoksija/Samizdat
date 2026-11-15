@@ -92,13 +92,18 @@ class MainActivity : ComponentActivity() {
         val connectionManager = ConnectionManager()
         val repository = PeerRepository(db.peerDao(), db.messageDao(), db.vouchDao(), db.rideIntentDao(), connectionManager)
         val updateManager = UpdateManager(application, torManager)
+        // Serves this phone's own installed (signed-release) APK to peers over the onion service (§20)
+        val apkSeeder = ApkSeeder(application, updateManager.currentVersionCode)
+        connectionManager.httpHandler = { requestLine, headers, socket ->
+            apkSeeder.handleHttp(requestLine, headers, socket)
+        }
         val segmentManager = SegmentManager(application) { torManager.socksPort.value }
         // Map tiles are fetched only over Tor; hand out the port only once Tor is fully bootstrapped
         TorTileDownloader.socksPortProvider = {
             if (torManager.isBootstrapped.value) torManager.socksPort.value else null
         }
         
-        val factory = PeersViewModelFactory(repository, torManager, updateManager, segmentManager)
+        val factory = PeersViewModelFactory(repository, torManager, updateManager, segmentManager, apkSeeder)
         viewModel = ViewModelProvider(this, factory)[PeersViewModel::class.java]
 
         val futureFactory = FutureRidesViewModelFactory(repository, viewModel)
@@ -319,6 +324,76 @@ fun MainScreen(
             viewModel = viewModel,
             myNickname = myNickname,
             onDismiss = { showMessageDialog = null }
+        )
+    }
+
+    // --- P2P Signed App Update Dialogs (Phase C) ---
+    val availableUpdate by viewModel.availableUpdate.collectAsState()
+    val updateUiState by viewModel.updateUiState.collectAsState()
+    val updateSourceCount by viewModel.updateSourceCount.collectAsState()
+
+    val readyState = updateUiState as? PeersViewModel.UpdateUiState.ReadyToInstall
+    if (readyState != null && viewModel.installDialogDismissedVersion != readyState.manifest.version) {
+        AlertDialog(
+            onDismissRequest = { viewModel.installDialogDismissedVersion = readyState.manifest.version },
+            title = { Text("Update v${readyState.manifest.version} Verified ✅") },
+            text = {
+                Column {
+                    Text("The downloaded APK passed all security checks:")
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("• Developer RSA signature: OK", style = MaterialTheme.typography.bodySmall)
+                    Text("• SHA-256 (${readyState.manifest.sha256.take(12)}...): OK", style = MaterialTheme.typography.bodySmall)
+                    Text("• APK signing certificate: OK", style = MaterialTheme.typography.bodySmall)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Would you like to install this update now?")
+                }
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.installDownloadedUpdate() }) {
+                    Text("Install Now")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.installDialogDismissedVersion = readyState.manifest.version }) {
+                    Text("Later")
+                }
+            }
+        )
+    } else if (
+        availableUpdate != null &&
+        updateUiState is PeersViewModel.UpdateUiState.Idle &&
+        updateSourceCount > 0 &&
+        viewModel.updateDialogDismissedVersion != availableUpdate!!.version
+    ) {
+        val m = availableUpdate!!
+        val sizeMb = "%.1f".format(m.size / (1024.0 * 1024.0))
+        AlertDialog(
+            onDismissRequest = { viewModel.updateDialogDismissedVersion = m.version },
+            title = { Text("Signed Update Available (v${m.version})") },
+            text = {
+                Column {
+                    Text("A newer developer-signed release is available from $updateSourceCount peer(s).")
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("• Size: $sizeMb MB", style = MaterialTheme.typography.bodySmall)
+                    Text("• SHA-256: ${m.sha256.take(16)}...", style = MaterialTheme.typography.bodySmall)
+                    Text("• Manifest signature: Verified ✅", style = MaterialTheme.typography.bodySmall)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Download over Tor in the background?")
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.updateDialogDismissedVersion = m.version
+                    viewModel.downloadAvailableUpdate()
+                }) {
+                    Text("Download")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.updateDialogDismissedVersion = m.version }) {
+                    Text("Later")
+                }
+            }
         )
     }
 
