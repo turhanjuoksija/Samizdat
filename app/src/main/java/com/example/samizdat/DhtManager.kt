@@ -47,6 +47,8 @@ class DhtManager(
     var getStoredPeers: suspend () -> List<Peer> = { emptyList() }
     var savePeerInfo: (onion: String, nickname: String, pubKey: String) -> Unit = { _, _, _ -> }
 
+    private var lastSyncLogKey: String? = null
+
     /**
      * Initialize Kademlia DHT node once we have an onion address
      */
@@ -83,7 +85,12 @@ class DhtManager(
                 val gridsToSync = interestGrids.ifEmpty { node.getStoredGrids().toList() }
                 
                 if (gridsToSync.isNotEmpty()) {
-                    onDebugLog("DHT SYNC: Fetching ${gridsToSync.size} grids (Radius: ${getListeningRadius()})")
+                    // Log only when the synced area changes (this loop runs every 15 s and flooded the Debug Logs)
+                    val syncKey = "${gridsToSync.size}/${getListeningRadius()}"
+                    if (syncKey != lastSyncLogKey) {
+                        lastSyncLogKey = syncKey
+                        onDebugLog("DHT SYNC: Fetching ${gridsToSync.size} grids (Radius: ${getListeningRadius()})")
+                    }
                     gridsToSync.forEach { gridId ->
                         val messages = node.getLocalMessages(gridId)
                         messages.forEach { msg ->

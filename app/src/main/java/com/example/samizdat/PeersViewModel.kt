@@ -46,13 +46,13 @@ class PeersViewModel(
     val routeManager = RouteManager(
         scope = viewModelScope,
         engines = listOf(BRouterEngine(segmentManager), OsrmEngine),
-        onDebugLog = { msg -> _debugLogs.add(0, msg) }
+        onDebugLog = { msg -> addLog(msg) }
     )
     
     /** DHT Manager - handles Kademlia/DHT operations */
     val dhtManager = DhtManager(
         scope = viewModelScope,
-        onDebugLog = { msg -> _debugLogs.add(0, msg) },
+        onDebugLog = { msg -> addLog(msg) },
         getTorOnionAddress = { torManager.onionAddress.value },
         getTorSocksPort = { torManager.socksPort.value },
         sendMessageToPeer = { target, message, socksPort ->
@@ -67,6 +67,9 @@ class PeersViewModel(
         private const val STATUS_REPLY_COOLDOWN_MS = 60 * 1000L // 1 minute
         private const val UPDATE_GOSSIP_COOLDOWN_MS = 60 * 60 * 1000L // 1 hour per peer
         private const val MAX_UPDATE_SOURCES = 20
+        private const val MAX_DEBUG_LOG_LINES = 1500
+        private val LOG_TIME_FORMAT: java.time.format.DateTimeFormatter =
+            java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
     }
 
     val livePeerTimestamps = androidx.compose.runtime.mutableStateMapOf<String, Long>()
@@ -147,6 +150,26 @@ class PeersViewModel(
     
     private val _debugLogs = mutableStateListOf<String>()
     val debugLogs: List<String> = _debugLogs
+
+    /**
+     * Adds a timestamped line ("HH:mm:ss.SSS message") to the in-app Debug Logs (newest first).
+     * Safe to call from any thread; the list is only modified on the main thread.
+     */
+    private fun addLog(msg: String) {
+        val line = "${java.time.LocalTime.now().format(LOG_TIME_FORMAT)} $msg"
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            appendLogLine(line)
+        } else {
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) { appendLogLine(line) }
+        }
+    }
+
+    private fun appendLogLine(line: String) {
+        _debugLogs.add(0, line)
+        while (_debugLogs.size > MAX_DEBUG_LOG_LINES) {
+            _debugLogs.removeAt(_debugLogs.size - 1)
+        }
+    }
 
     // ========== REPOSITORY FLOWS ==========
     
@@ -244,7 +267,7 @@ class PeersViewModel(
 
         try {
             // Start server when VM is created - REQUIRED for Tor Hidden Service to work
-            repository.startServer(viewModelScope)
+            repository.startServer(viewModelScope) { msg -> addLog(msg) }
             // Start Tor
             torManager.startTor()
         } catch (e: Throwable) {
@@ -266,7 +289,7 @@ class PeersViewModel(
         routeManager.onRouteChanged = {
             if (isBroadcasting) {
                 isBroadcasting = false
-                _debugLogs.add(0, "BROADCAST PAUSED (Route Changed)")
+                addLog("BROADCAST PAUSED (Route Changed)")
             }
         }
         
@@ -298,12 +321,19 @@ class PeersViewModel(
             }
         }
         
-        // Collect Tor logs for UI
+        // Collect Tor logs for UI (messages already start with "Tor:" or "Nostr:")
         viewModelScope.launch {
             torManager.statusMessage.collect { msg ->
                 if (msg.isNotEmpty()) {
-                    _debugLogs.add(0, "${System.currentTimeMillis()}: $msg")
+                    addLog(msg)
                 }
+            }
+        }
+
+        // Log the SOCKS port explicitly (status messages are conflated and can be skipped)
+        viewModelScope.launch {
+            torManager.socksPort.collect { port ->
+                if (port != null) addLog("TOR: SOCKS port $port")
             }
         }
 
@@ -311,18 +341,19 @@ class PeersViewModel(
         viewModelScope.launch {
             torOnionAddress.collect { onion ->
                 if (onion != null) {
+                    addLog("TOR: Own onion service online: $onion")
                     dhtManager.initKademlia(onion)
                     
                     // Ping existing stored peers and run Nostr discovery so new phones are always found
                     pingAllPeers()
-                    _debugLogs.add(0, "Starting Nostr Bootstrap discovery...")
+                    addLog("Starting Nostr Bootstrap discovery...")
                     torManager.bootstrapManager.startDiscovery(onion) { discoveredOnions ->
                         viewModelScope.launch {
                             val knownOnions = storedPeers.first().mapNotNull { it.onion }.toSet()
                             discoveredOnions.forEach { discoveredOnion ->
                                 val clean = OnionUtils.ensureOnionSuffix(discoveredOnion)
                                 if (clean !in knownOnions) {
-                                    _debugLogs.add(0, "Nostr discovered peer: $clean")
+                                    addLog("Nostr discovered peer: $clean")
                                     addManualPeer(clean, "Nostr Peer")
                                 }
                             }
@@ -520,15 +551,15 @@ class PeersViewModel(
                             type = type
                         ))
                         val logPrefix = if (type == "ride_request") "RIDE REQUEST" else "INBOUND"
-                        _debugLogs.add(0, "$logPrefix from ${senderNick ?: resolvedPeer?.nickname ?: finalPk}: $messageText")
+                        addLog("$logPrefix from ${senderNick ?: resolvedPeer?.nickname ?: finalPk}: $messageText")
                         
                         // Auto-start tracking if accepted
                         if (type == "ride_accept" && !activeRidePeers.contains(finalPk)) {
                             activeRidePeers.add(finalPk)
-                            _debugLogs.add(0, "Started live tracking with ${senderNick ?: finalPk}")
+                            addLog("Started live tracking with ${senderNick ?: finalPk}")
                         }
                     } else if (type == "status") {
-                         _debugLogs.add(0, "STATUS UPDATE from ${senderNick ?: resolvedPeer?.nickname ?: lookupId}")
+                         addLog("STATUS UPDATE from ${senderNick ?: resolvedPeer?.nickname ?: lookupId}")
                     }
                 }
             }
@@ -630,7 +661,7 @@ class PeersViewModel(
             val msgId = repository.saveMessage(initialMsg)
 
             try {
-                _debugLogs.add(0, "OUTBOUND to ${peer.nickname}: Connecting...")
+                addLog("OUTBOUND to ${peer.nickname}: Connecting...")
                 
                 val myOnion = torManager.onionAddress.value ?: "unknown"
                 val json = org.json.JSONObject().apply {
@@ -653,17 +684,17 @@ class PeersViewModel(
                 val currentSocksPort = torManager.socksPort.value
                 if (currentSocksPort == null) {
                     repository.updateMessage(initialMsg.copy(id = msgId, status = "FAILED"))
-                    _debugLogs.add(0, "ERROR: Tor SOCKS port not available")
+                    addLog("ERROR: Tor SOCKS port not available")
                     return@launch
                 }
                 repository.sendMessage(peer.lastKnownIp, payload, currentSocksPort)
                 markPeerAlive(peer.onion ?: peer.lastKnownIp)
                 
                 repository.updateMessage(initialMsg.copy(id = msgId, status = "DELIVERED"))
-                _debugLogs.add(0, "OUTBOUND to ${peer.nickname}: DELIVERED")
+                addLog("OUTBOUND to ${peer.nickname}: DELIVERED")
             } catch (e: Exception) {
                 repository.updateMessage(initialMsg.copy(id = msgId, status = "FAILED"))
-                _debugLogs.add(0, "ERROR sending to ${peer.nickname}: ${e.message}")
+                addLog("ERROR sending to ${peer.nickname}: ${e.message}")
             }
         }
     }
@@ -675,7 +706,7 @@ class PeersViewModel(
                 acceptRide(peer)
                 _acceptedRequestIds.value = _acceptedRequestIds.value + requestMsg.id
             } else {
-                _debugLogs.add(0, "ERROR: Peer not found for request")
+                addLog("ERROR: Peer not found for request")
             }
         }
     }
@@ -694,11 +725,11 @@ class PeersViewModel(
             }
             
             mySeats = (mySeats - 1).coerceAtLeast(0)
-            _debugLogs.add(0, "Ride accepted for ${peer.nickname}. Seats remaining: $mySeats")
+            addLog("Ride accepted for ${peer.nickname}. Seats remaining: $mySeats")
             
             if (mySeats == 0 && isBroadcasting) {
                 isBroadcasting = false
-                _debugLogs.add(0, "BROADCAST STOPPED: No more seats available")
+                addLog("BROADCAST STOPPED: No more seats available")
             }
         }
     }
@@ -744,9 +775,9 @@ class PeersViewModel(
                 lastStatusReplyTimestamps[cleanOnion] = System.currentTimeMillis()
                 repository.sendMessage(cleanOnion, payload, currentSocksPort)
                 markPeerAlive(cleanOnion)
-                _debugLogs.add(0, "HANDSHAKE: Sent Hello to $localNickname")
+                addLog("HANDSHAKE: Sent Hello to $localNickname")
             } catch (e: Exception) {
-                _debugLogs.add(0, "HANDSHAKE FAILED: ${e.message}")
+                addLog("HANDSHAKE FAILED: ${e.message}")
             } finally {
                 pingsInFlight.remove(cleanOnion)
             }
@@ -756,14 +787,14 @@ class PeersViewModel(
     fun pingAllPeers(quiet: Boolean = false) {
         viewModelScope.launch {
             val currentSocksPort = torManager.socksPort.value ?: run {
-                if (!quiet) _debugLogs.add(0, "PING: Waiting for Tor SOCKS port...")
+                if (!quiet) addLog("PING: Waiting for Tor SOCKS port...")
                 return@launch
             }
             val myOnion = torManager.onionAddress.value
             val payload = getMyStatusPayload()
             val peers = storedPeers.first().filter { !it.onion.isNullOrEmpty() && OnionUtils.ensureOnionSuffix(it.onion) != myOnion }
             if (peers.isEmpty()) {
-                if (!quiet) _debugLogs.add(0, "PING: No saved peers to ping")
+                if (!quiet) addLog("PING: No saved peers to ping")
                 return@launch
             }
             val toPing = if (quiet) {
@@ -773,12 +804,12 @@ class PeersViewModel(
             }
             if (toPing.isEmpty()) return@launch
 
-            if (!quiet) _debugLogs.add(0, "PING: Checking ${toPing.size} known peer(s)...")
+            if (!quiet) addLog("PING: Checking ${toPing.size} known peer(s)...")
             toPing.forEach { peer ->
                 val rawOnion = peer.onion ?: return@forEach
                 val targetOnion = OnionUtils.ensureOnionSuffix(rawOnion)
                 if (!pingsInFlight.add(targetOnion)) {
-                    if (!quiet) _debugLogs.add(0, "PING: ${peer.nickname} check already in progress")
+                    if (!quiet) addLog("PING: ${peer.nickname} check already in progress")
                     return@forEach
                 }
                 launch {
@@ -786,11 +817,11 @@ class PeersViewModel(
                         lastStatusReplyTimestamps[targetOnion] = System.currentTimeMillis()
                         repository.sendMessage(targetOnion, payload, currentSocksPort)
                         markPeerAlive(targetOnion)
-                        _debugLogs.add(0, "PING OK: ${peer.nickname} is LIVE")
+                        addLog("PING OK: ${peer.nickname} is LIVE")
                     } catch (e: Exception) {
                         Log.d("PeersViewModel", "Ping failed for ${peer.nickname}: ${e.message}")
                         if (!quiet) {
-                            _debugLogs.add(0, "PING FAILED: ${peer.nickname} (${e.message})")
+                            addLog("PING FAILED: ${peer.nickname} (${e.message})")
                         }
                     } finally {
                         pingsInFlight.remove(targetOnion)
@@ -824,7 +855,7 @@ class PeersViewModel(
         viewModelScope.launch {
             val payload = getMyStatusPayload()
 
-            _debugLogs.add(0, "BROADCASTING STATUS: $myRole ($mySeats seats) @ $myLatitude, $myLongitude")
+            addLog("BROADCASTING STATUS: $myRole ($mySeats seats) @ $myLatitude, $myLongitude")
 
             val currentPeers = storedPeers.first()
             
@@ -855,7 +886,7 @@ class PeersViewModel(
                         routeGrids.forEach { gridId ->
                             dhtManager.sendToGrid(dhtContent, myNickname, gridId, commonTimestamp, routeManager, mySeats)
                         }
-                        _debugLogs.add(0, "DHT: Route broadcast to ${routeGrids.size} grids")
+                        addLog("DHT: Route broadcast to ${routeGrids.size} grids")
                     }
                 }
             }
@@ -993,7 +1024,7 @@ class PeersViewModel(
         val isValid = CryptoUtils.verifySignature(dataToVerify, sig, pubKeyBytes)
         
         if (isValid) {
-            _debugLogs.add(0, "WoT: Trusted Vouch from $voucherNick for $targetPk")
+            addLog("WoT: Trusted Vouch from $voucherNick for $targetPk")
             repository.saveVouch(VouchEntity(voucherOnion, targetPk, sig, timestamp))
             
             val peers = storedPeers.first()
@@ -1002,7 +1033,7 @@ class PeersViewModel(
                 savePeer(it.lastKnownIp, it.nickname, it.publicKey, it.onion, it.role, it.seats, it.extraInfo, it.latitude, it.longitude, it.destLat, it.destLon, it.fullPublicKey)
             }
         } else {
-            _debugLogs.add(0, "WoT: REJECTED invalid Vouch from $voucherNick")
+            addLog("WoT: REJECTED invalid Vouch from $voucherNick")
         }
     }
 
@@ -1023,7 +1054,7 @@ class PeersViewModel(
                 put("p", myFullPubKey ?: "")
             }.toString()
 
-            _debugLogs.add(0, "WoT: Vouching for ${peer.nickname}...")
+            addLog("WoT: Vouching for ${peer.nickname}...")
             
             repository.saveVouch(VouchEntity(torOnionAddress.value ?: "me", peer.publicKey, signature, timestamp))
             
@@ -1068,7 +1099,7 @@ class PeersViewModel(
             manifest.verify(updateManager.packageName)
         }
         if (!valid) {
-            _debugLogs.add(0, "UPDATE: REJECTED v${manifest.version} announcement (invalid developer signature)")
+            addLog("UPDATE: REJECTED v${manifest.version} announcement (invalid developer signature)")
             return
         }
         acceptVerifiedManifest(manifest)
@@ -1084,9 +1115,9 @@ class PeersViewModel(
                 val stored = updateManager.loadStoredManifest()
                 if (stored == null || stored.version <= manifest.version) updateManager.storeManifest(manifest)
                 if (apkSeeder.offerSelf(manifest)) {
-                    _debugLogs.add(0, "UPDATE: Sharing own v${manifest.version} with peers (signed release verified)")
+                    addLog("UPDATE: Sharing own v${manifest.version} with peers (signed release verified)")
                 } else {
-                    _debugLogs.add(0, "UPDATE: Not sharing v${manifest.version}: ${apkSeeder.status.value}")
+                    addLog("UPDATE: Not sharing v${manifest.version}: ${apkSeeder.status.value}")
                 }
             }
             manifest.version > current -> {
@@ -1095,7 +1126,7 @@ class PeersViewModel(
                     _availableUpdate.value = manifest
                     updateManager.storeManifest(manifest)
                     _updateSourceCount.value = updateSources[manifest.version]?.size ?: 0
-                    _debugLogs.add(0, "UPDATE: v${manifest.version} available (developer signature verified ✅)")
+                    addLog("UPDATE: v${manifest.version} available (developer signature verified ✅)")
                 }
             }
             else -> { /* older than installed: ignore (downgrade protection) */ }
@@ -1142,7 +1173,7 @@ class PeersViewModel(
             try {
                 repository.sendMessage(peerOnion, manifest.toGossipJson(sourceUrl), socksPort)
                 markPeerAlive(peerOnion)
-                _debugLogs.add(0, "GOSSIP: Announced signed v${manifest.version} to ${peerNick ?: peerOnion.take(12)} (they have v$peerAppVersion)")
+                addLog("GOSSIP: Announced signed v${manifest.version} to ${peerNick ?: peerOnion.take(12)} (they have v$peerAppVersion)")
             } catch (_: Exception) {
                 lastUpdateGossip.remove(peerOnion)
             }
@@ -1160,19 +1191,19 @@ class PeersViewModel(
         }
         updateDownloadJob = viewModelScope.launch {
             _updateUiState.value = UpdateUiState.Downloading(0, manifest.size)
-            _debugLogs.add(0, "UPDATE: Downloading v${manifest.version} over Tor (${sources.size} source(s))...")
+            addLog("UPDATE: Downloading v${manifest.version} over Tor (${sources.size} source(s))...")
             try {
                 val file = updateManager.downloadVerified(manifest, sources) { done, total ->
                     _updateUiState.value = UpdateUiState.Downloading(done, total)
                 }
                 _updateUiState.value = UpdateUiState.ReadyToInstall(manifest, file.absolutePath)
-                _debugLogs.add(0, "UPDATE: v${manifest.version} verified ✅ (signature, SHA-256, certificate). Ready to install.")
+                addLog("UPDATE: v${manifest.version} verified ✅ (signature, SHA-256, certificate). Ready to install.")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 _updateUiState.value = UpdateUiState.Idle
                 throw e
             } catch (e: Exception) {
                 _updateUiState.value = UpdateUiState.Failed(e.message ?: "Download failed")
-                _debugLogs.add(0, "UPDATE ERROR: ${e.message}")
+                addLog("UPDATE ERROR: ${e.message}")
             }
         }
     }
@@ -1202,7 +1233,7 @@ class PeersViewModel(
         val lat = routeManager.myLatitude
         val lon = routeManager.myLongitude
         if (lat == null || lon == null) {
-            _debugLogs.add(0, "OFFLINE DATA: No location yet - cannot pick a region")
+            addLog("OFFLINE DATA: No location yet - cannot pick a region")
             return
         }
         downloadSegments(listOf(SegmentManager.segmentName(lat, lon)))
@@ -1212,7 +1243,7 @@ class PeersViewModel(
     fun downloadRouteSegments() {
         val missing = routeManager.requiredSegments().filterNot { segmentManager.isInstalled(it) }
         if (missing.isEmpty()) {
-            _debugLogs.add(0, "OFFLINE DATA: Route already fully covered by offline data")
+            addLog("OFFLINE DATA: Route already fully covered by offline data")
             return
         }
         downloadSegments(missing)
@@ -1227,10 +1258,10 @@ class PeersViewModel(
         val label = names.joinToString(", ")
         segmentManager.clearDownloadState()
         segmentDownloadJob = viewModelScope.launch {
-            _debugLogs.add(0, "OFFLINE DATA: Downloading $label over Tor...")
+            addLog("OFFLINE DATA: Downloading $label over Tor...")
             segmentManager.download(names)
             val state = segmentManager.downloadState.value
-            _debugLogs.add(0, "OFFLINE DATA: $label -> ${if (state is SegmentManager.DownloadState.Error) "FAILED: ${state.message}" else "OK"}")
+            addLog("OFFLINE DATA: $label -> ${if (state is SegmentManager.DownloadState.Error) "FAILED: ${state.message}" else "OK"}")
             if (state is SegmentManager.DownloadState.Done) routeManager.calculateRoute()
         }
     }
@@ -1239,7 +1270,7 @@ class PeersViewModel(
         if (segmentDownloadJob?.isActive == true) {
             segmentDownloadJob?.cancel()
             segmentManager.cancelActiveDownload()
-            _debugLogs.add(0, "OFFLINE DATA: Download cancelled")
+            addLog("OFFLINE DATA: Download cancelled")
         }
     }
 

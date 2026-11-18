@@ -53,13 +53,22 @@ class ConnectionManager {
     private val _incomingMessages = MutableSharedFlow<Pair<String, String>>()
     val incomingMessages: SharedFlow<Pair<String, String>> = _incomingMessages
 
+    /** Diagnostic callback for the in-app Debug Logs (server start/failure). Called from an IO thread. */
+    @Volatile
+    var onLog: ((String) -> Unit)? = null
+
     suspend fun startListening(port: Int) = withContext(Dispatchers.IO) {
         if (isRunning) return@withContext
         try {
-            // Bind strictly to the localhost loopback interface to prevent local network exposure
-            serverSocket = ServerSocket(port, 50, java.net.InetAddress.getLoopbackAddress())
+            // Bind strictly to IPv4 127.0.0.1 (never the LAN). This MUST match the onion service target
+            // "127.0.0.1:12345" in SamizdatTorManager. Do NOT use InetAddress.getLoopbackAddress():
+            // on Android it always returns the IPv6 loopback ::1, so Tor's connection to 127.0.0.1
+            // was refused and every incoming onion connection failed (DEVELOPMENT_NOTES §22).
+            val bindAddress = java.net.InetAddress.getByAddress("localhost", byteArrayOf(127, 0, 0, 1))
+            serverSocket = ServerSocket(port, 50, bindAddress)
             isRunning = true
-            Log.i(TAG, "Server started and listening on port $port")
+            Log.i(TAG, "Server started and listening on 127.0.0.1:$port")
+            onLog?.invoke("SERVER: Listening on 127.0.0.1:$port")
             
             coroutineScope {
                 while (isRunning) {
@@ -85,6 +94,7 @@ class ConnectionManager {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start server", e)
+            onLog?.invoke("SERVER ERROR: Could not listen on 127.0.0.1:$port (${e.message})")
         }
     }
 
@@ -164,6 +174,7 @@ class ConnectionManager {
             if (idx > 0) headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
         }
         Log.i(TAG, "HTTP request: ${requestLine.take(100)}")
+        onLog?.invoke("SERVER: Incoming HTTP ${requestLine.take(60)}")
         val handler = httpHandler
         if (handler == null) {
             val out = socket.getOutputStream()

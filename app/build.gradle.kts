@@ -29,8 +29,8 @@ android {
         applicationId = "com.example.samizdat"
         minSdk = 26 // Supporting back to Android 8.0
         targetSdk = 34
-        versionCode = 21 // Field-test fixes: .onion retries/90s timeout/detached HS, BackHandler, ViewModel DI, Nostr OK & UI
-        versionName = "0.7.2-alpha"
+        versionCode = 22 // ROOT CAUSE FIX: local server bound to ::1 instead of 127.0.0.1 (all incoming onion connections failed) + timestamped logs
+        versionName = "0.7.3-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

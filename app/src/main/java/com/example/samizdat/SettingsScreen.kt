@@ -496,7 +496,12 @@ fun SettingsScreen(
                     ) {
                         Text("Debug Logs", color = Color.Green, style = MaterialTheme.typography.labelSmall)
                         IconButton(onClick = {
-                            val logs = viewModel.debugLogs.take(200).joinToString("\n")
+                            val header = "Samizdat Debug Logs (newest first)\n" +
+                                "App: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})\n" +
+                                "Onion: ${onionAddress ?: "-"}\n" +
+                                "Tor: $torStatus\n" +
+                                "----\n"
+                            val logs = header + viewModel.debugLogs.joinToString("\n")
                             val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                                 type = "text/plain"
                                 putExtra(android.content.Intent.EXTRA_TEXT, logs)

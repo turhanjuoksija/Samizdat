@@ -78,7 +78,8 @@ class PeerRepository(
     }
 
     // Start listening for incoming messages
-    fun startServer(scope: CoroutineScope) {
+    fun startServer(scope: CoroutineScope, onLog: ((String) -> Unit)? = null) {
+        connectionManager.onLog = onLog
         scope.launch {
             connectionManager.startListening(12345)
         }
