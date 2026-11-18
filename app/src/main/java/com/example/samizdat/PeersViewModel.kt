@@ -30,7 +30,7 @@ import androidx.compose.runtime.setValue
  * Messaging logic remains here for now (could be extracted to MessagingManager later).
  */
 class PeersViewModel(
-    private val repository: PeerRepository,
+    val repository: PeerRepository,
     val torManager: SamizdatTorManager,
     val updateManager: UpdateManager,
     val segmentManager: SegmentManager,
@@ -71,6 +71,7 @@ class PeersViewModel(
 
     val livePeerTimestamps = androidx.compose.runtime.mutableStateMapOf<String, Long>()
     private val lastStatusReplyTimestamps = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val pingsInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     fun markPeerAlive(onionOrIp: String?) {
         if (onionOrIp.isNullOrBlank()) return
@@ -236,6 +237,11 @@ class PeersViewModel(
     // ========== INITIALIZATION ==========
 
     init {
+        // Map tiles are fetched only over Tor; hand out the port only once Tor is fully bootstrapped
+        TorTileDownloader.socksPortProvider = {
+            if (torManager.isBootstrapped.value) torManager.socksPort.value else null
+        }
+
         try {
             // Start server when VM is created - REQUIRED for Tor Hidden Service to work
             repository.startServer(viewModelScope)
@@ -331,11 +337,13 @@ class PeersViewModel(
             }
         }
 
-        // Automatic Status Broadcast Loop
+        // Automatic Status Broadcast Loop & Offline Peer Discovery Ping
         viewModelScope.launch {
             while (true) {
                 if (isBroadcasting) {
                     broadcastStatus(myNickname)
+                } else if (torManager.isBootstrapped.value && torManager.onionAddress.value != null) {
+                    pingAllPeers(quiet = true)
                 }
                 delay(30000) // every 30 seconds
             }
@@ -728,6 +736,7 @@ class PeersViewModel(
         )
         
         viewModelScope.launch {
+            if (!pingsInFlight.add(cleanOnion)) return@launch
             try {
                 delay(500) 
                 val payload = getMyStatusPayload()
@@ -738,26 +747,40 @@ class PeersViewModel(
                 _debugLogs.add(0, "HANDSHAKE: Sent Hello to $localNickname")
             } catch (e: Exception) {
                 _debugLogs.add(0, "HANDSHAKE FAILED: ${e.message}")
+            } finally {
+                pingsInFlight.remove(cleanOnion)
             }
         }
     }
 
-    fun pingAllPeers() {
+    fun pingAllPeers(quiet: Boolean = false) {
         viewModelScope.launch {
             val currentSocksPort = torManager.socksPort.value ?: run {
-                _debugLogs.add(0, "PING: Waiting for Tor SOCKS port...")
+                if (!quiet) _debugLogs.add(0, "PING: Waiting for Tor SOCKS port...")
                 return@launch
             }
             val myOnion = torManager.onionAddress.value
             val payload = getMyStatusPayload()
-            val peers = storedPeers.first().filter { !it.onion.isNullOrEmpty() && it.onion != myOnion }
+            val peers = storedPeers.first().filter { !it.onion.isNullOrEmpty() && OnionUtils.ensureOnionSuffix(it.onion) != myOnion }
             if (peers.isEmpty()) {
-                _debugLogs.add(0, "PING: No saved peers to ping")
+                if (!quiet) _debugLogs.add(0, "PING: No saved peers to ping")
                 return@launch
             }
-            _debugLogs.add(0, "PING: Checking ${peers.size} known peer(s)...")
-            peers.forEach { peer ->
-                val targetOnion = peer.onion ?: return@forEach
+            val toPing = if (quiet) {
+                peers.filter { !isPeerLive(it.onion) }
+            } else {
+                peers
+            }
+            if (toPing.isEmpty()) return@launch
+
+            if (!quiet) _debugLogs.add(0, "PING: Checking ${toPing.size} known peer(s)...")
+            toPing.forEach { peer ->
+                val rawOnion = peer.onion ?: return@forEach
+                val targetOnion = OnionUtils.ensureOnionSuffix(rawOnion)
+                if (!pingsInFlight.add(targetOnion)) {
+                    if (!quiet) _debugLogs.add(0, "PING: ${peer.nickname} check already in progress")
+                    return@forEach
+                }
                 launch {
                     try {
                         lastStatusReplyTimestamps[targetOnion] = System.currentTimeMillis()
@@ -766,6 +789,11 @@ class PeersViewModel(
                         _debugLogs.add(0, "PING OK: ${peer.nickname} is LIVE")
                     } catch (e: Exception) {
                         Log.d("PeersViewModel", "Ping failed for ${peer.nickname}: ${e.message}")
+                        if (!quiet) {
+                            _debugLogs.add(0, "PING FAILED: ${peer.nickname} (${e.message})")
+                        }
+                    } finally {
+                        pingsInFlight.remove(targetOnion)
                     }
                 }
             }
@@ -1225,14 +1253,31 @@ class PeersViewModel(
 }
 
 class PeersViewModelFactory(
-    private val repository: PeerRepository, 
-    private val torManager: SamizdatTorManager,
-    private val updateManager: UpdateManager,
-    private val segmentManager: SegmentManager,
-    private val apkSeeder: ApkSeeder
+    private val application: android.app.Application
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(PeersViewModel::class.java)) {
+            val db = AppDatabase.getDatabase(application)
+            val torManager = SamizdatTorManager(application)
+            val connectionManager = ConnectionManager()
+            val repository = PeerRepository(
+                db.peerDao(),
+                db.messageDao(),
+                db.vouchDao(),
+                db.rideIntentDao(),
+                connectionManager
+            )
+            val updateManager = UpdateManager(application, torManager)
+            // Serves this phone's own installed (signed-release) APK to peers over the onion service (§20)
+            val apkSeeder = ApkSeeder(application, updateManager.currentVersionCode)
+            connectionManager.httpHandler = { requestLine, headers, socket ->
+                apkSeeder.handleHttp(requestLine, headers, socket)
+            }
+            val segmentManager = SegmentManager(application) { torManager.socksPort.value }
+            TorTileDownloader.socksPortProvider = {
+                if (torManager.isBootstrapped.value) torManager.socksPort.value else null
+            }
+
             @Suppress("UNCHECKED_CAST")
             return PeersViewModel(repository, torManager, updateManager, segmentManager, apkSeeder) as T
         }

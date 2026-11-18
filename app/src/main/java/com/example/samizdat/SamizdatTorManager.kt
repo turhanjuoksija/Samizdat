@@ -63,6 +63,7 @@ class SamizdatTorManager(private val context: Application) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lifecycleMutex = Mutex()
     private val keyFile by lazy { File(context.filesDir, "onion_v3_private_key") }
+    private val hostnameFile by lazy { File(context.filesDir, "onion_v3_hostname") }
 
     @Volatile private var torService: Service? = null // always a TorService, see BUILD NOTE
     @Volatile private var isBound = false
@@ -285,19 +286,37 @@ class SamizdatTorManager(private val context: Application) {
         val ports = mapOf(80 to "127.0.0.1:12345")
         val existingKey = loadPrivateKey()
 
+        var collisionFallbackAddress: String? = null
         val result: Map<String, String> = try {
             if (existingKey != null) {
-                conn.addOnion("ED25519-V3:" + Base64.encodeToString(existingKey, Base64.NO_WRAP), ports)
+                conn.addOnion("ED25519-V3:" + Base64.encodeToString(existingKey, Base64.NO_WRAP), ports, false, true)
             } else {
-                conn.addOnion("NEW:ED25519-V3", ports)
+                conn.addOnion("NEW:ED25519-V3", ports, false, true)
             }
         } catch (e: Exception) {
-            _statusMessage.value = "Tor: HS Error - ${e.message}"
-            Log.e(TAG, "HS Creation Failed", e)
-            return
+            val isCollision = existingKey != null &&
+                (e.message?.contains("collision", ignoreCase = true) == true)
+            val cached = if (isCollision) {
+                _onionAddress.value ?: try {
+                    hostnameFile.takeIf { it.exists() }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+            if (cached != null) {
+                Log.w(TAG, "Hidden Service already registered in Tor (detached collision); reusing $cached")
+                collisionFallbackAddress = cached
+                emptyMap()
+            } else {
+                _statusMessage.value = "Tor: HS Error - ${e.message}"
+                Log.e(TAG, "HS Creation Failed", e)
+                return
+            }
         }
 
-        val rawAddress = result["onionAddress"]
+        val rawAddress = collisionFallbackAddress ?: result["onionAddress"]
         if (rawAddress.isNullOrBlank()) {
             _statusMessage.value = "Tor: HS Error - no onion address returned"
             return
@@ -306,9 +325,14 @@ class SamizdatTorManager(private val context: Application) {
         Log.i(TAG, "Hidden Service created: $address")
 
         // Tor only returns PrivateKey for NEW keys. Persist it in the same raw 64-byte format.
-        if (existingKey == null) {
+        if (existingKey == null && collisionFallbackAddress == null) {
             result["onionPrivKey"]?.let { saveNewPrivateKey(it) }
                 ?: Log.e(TAG, "Tor did not return a private key for the new onion service")
+        }
+        if (collisionFallbackAddress == null) {
+            try {
+                hostnameFile.writeText(address)
+            } catch (_: Exception) { }
         }
 
         _onionAddress.value = address

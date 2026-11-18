@@ -55,12 +55,18 @@ fun ContactsScreen(
                         .clickable { onPeerClick(peer) },
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp).fillMaxWidth()
                     ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f, fill = false)
+                            ) {
                                 val isLive = peer.onion?.let { onion ->
                                     val ts = livePeersMap[OnionUtils.ensureOnionSuffix(onion)]
                                     ts != null && (nowMs - ts) <= PeersViewModel.LIVE_PEER_WINDOW_MS
@@ -80,22 +86,30 @@ fun ContactsScreen(
                                     Text("+${peer.reputationScore - 5}", style = MaterialTheme.typography.labelSmall)
                                 }
                             }
-                            if (peer.onion != null) {
-                                Text("Onion: ${peer.onion.take(16)}...", color = Color(0xFF6A0DAD), style = MaterialTheme.typography.bodySmall)
-                            }
-                            
+
                             // Distance Calculation
                             if (peer.latitude != null && peer.longitude != null && viewModel.myLatitude != null && viewModel.myLongitude != null) {
                                 val results = FloatArray(1)
                                 Location.distanceBetween(viewModel.myLatitude!!, viewModel.myLongitude!!, peer.latitude, peer.longitude, results)
                                 val dist = results[0]
+                                Spacer(modifier = Modifier.width(8.dp))
                                 if (dist < 1000) {
-                                     Text("Dist: ${dist.toInt()} m", style = MaterialTheme.typography.labelSmall, color = Color.Magenta)
+                                    Text("Dist: ${dist.toInt()} m", style = MaterialTheme.typography.labelSmall, color = Color.Magenta)
                                 } else {
-                                     Text("Dist: ${"%.1f".format(dist / 1000)} km", style = MaterialTheme.typography.labelSmall, color = Color.Magenta)
+                                    Text("Dist: ${"%.1f".format(dist / 1000)} km", style = MaterialTheme.typography.labelSmall, color = Color.Magenta)
                                 }
                             }
                         }
+
+                        if (peer.onion != null) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Onion: ${peer.onion.take(16)}...",
+                                color = Color(0xFF6A0DAD),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                             horizontalArrangement = Arrangement.End,

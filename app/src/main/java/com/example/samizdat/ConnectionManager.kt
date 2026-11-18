@@ -30,6 +30,9 @@ class ConnectionManager {
         private const val MAX_HTTP_LINE = 4_096
         private const val MAX_HTTP_HEADER_BYTES = 8_192
         private const val MAX_HTTP_HEADERS = 50
+        private const val ONION_CONNECT_TIMEOUT_MS = 90_000
+        private const val SEND_MAX_ATTEMPTS = 3
+        private const val SEND_RETRY_DELAY_MS = 5_000L
     }
 
     // Bounds the number of simultaneously handled connections (a long APK upload must not block messaging,
@@ -194,30 +197,41 @@ class ConnectionManager {
         }
         
         val targetPort = 80 // Tor hidden services always use port 80
-        try {
-            Log.d(TAG, "Connecting to $finalIp:$targetPort via Tor SOCKS proxy :$socksPort")
-            
-            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
-            val socket = Socket(proxy).apply {
-                connect(InetSocketAddress.createUnresolved(finalIp, targetPort), 30000) 
+        val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+
+        for (attempt in 1..SEND_MAX_ATTEMPTS) {
+            try {
+                Log.d(TAG, "Connecting to $finalIp:$targetPort via Tor SOCKS proxy :$socksPort (attempt $attempt/$SEND_MAX_ATTEMPTS)")
+
+                Socket(proxy).use { socket ->
+                    socket.soTimeout = SOCKET_TIMEOUT_MS
+                    socket.connect(InetSocketAddress.createUnresolved(finalIp, targetPort), ONION_CONNECT_TIMEOUT_MS)
+
+                    val writer = PrintWriter(socket.getOutputStream().writer(Charsets.UTF_8), true)
+                    val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+                    writer.println(message)
+
+                    // Wait for ACK
+                    val response = reader.readLine()
+                    if (response != "OK") {
+                        throw java.io.IOException("No ACK received from recipient (got: $response)")
+                    }
+                }
+
+                Log.d(TAG, "Message sent and delivered to $finalIp (attempt $attempt)")
+                return@withContext
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Attempt $attempt/$SEND_MAX_ATTEMPTS to $finalIp:$targetPort failed: ${e.message}")
+                if (attempt < SEND_MAX_ATTEMPTS) {
+                    kotlinx.coroutines.delay(SEND_RETRY_DELAY_MS * attempt)
+                } else {
+                    Log.e(TAG, "Failed to send message to $finalIp:$targetPort after $SEND_MAX_ATTEMPTS attempts. Error: ${e.message}", e)
+                    Log.e(TAG, "Hint: Onion connections can take several minutes to become available after Tor initialization.")
+                    throw e
+                }
             }
-            
-            val writer = PrintWriter(socket.getOutputStream().writer(Charsets.UTF_8), true)
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
-            writer.println(message)
-            
-            // Wait for ACK
-            val response = reader.readLine()
-            if (response != "OK") {
-                throw Exception("No ACK received from recipient (got: $response)")
-            }
-            
-            socket.close()
-            Log.d(TAG, "Message sent and delivered to $finalIp")
-        } catch (e: Exception) {
-             Log.e(TAG, "Failed to send message to $finalIp:$targetPort. Error: ${e.message}", e)
-             Log.e(TAG, "Hint: Onion connections can take several minutes to become available after Tor initialization.")
-             throw e
         }
     }
 

@@ -29,8 +29,8 @@ android {
         applicationId = "com.example.samizdat"
         minSdk = 26 // Supporting back to Android 8.0
         targetSdk = 34
-        versionCode = 20 // P2P signed APK seeding (3-lock model) + QR/paste/DHT fixes
-        versionName = "0.7.1-alpha"
+        versionCode = 21 // Field-test fixes: .onion retries/90s timeout/detached HS, BackHandler, ViewModel DI, Nostr OK & UI
+        versionName = "0.7.2-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

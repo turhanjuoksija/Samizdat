@@ -61,9 +61,9 @@ object NostrPoWMiner {
 
             currentNonce++
             
-            // Log progress occasionally to avoid silent freezing
+            // Log progress to logcat only so UI Debug Logs aren't flooded
             if (currentNonce % 500_000L == 0L) {
-                onProgress("Mining... checked $currentNonce hashes")
+                Log.d(TAG, "Mining... checked $currentNonce hashes")
             }
         }
     }

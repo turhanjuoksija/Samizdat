@@ -196,3 +196,21 @@ Päivitetty P2P-päivitysarkkitehtuuri niin, että puhelimet jakavat itse asenne
   - **DoS-rajoitukset**: Koska kaikki Tor-liikenne saapuu osoitteesta `127.0.0.1`, rajoitukset ovat globaaleja per jakaja: max **1 samanaikainen lähetys**, max **4 lähetystä tunnissa**, max **150 Mt / 24 h**, max 20 min per lähetys, ja oletuksena vain **Wi-Fi/mittaamaton verkko + akku >= 30 % (tai laturissa)**. Manifestien gossip on rajoitettu max 1 kertaan per vertainen per tunti.
 - **Release Keystore (`keystore.properties`)**:
   - `app/build.gradle.kts` käyttää omaa release-keystorea, jos projektin juuressa on `keystore.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`), ja muuten varalla debug-avainta. Säilytä `private_rsa.pem` ja release-keystore erillään ja varmuuskopioituina!
+
+## 21. Kenttätestikorjaukset (Field Test Bug Fixes v0.7.2-alpha / Build 21) - 18.11.2026 🛠️
+Korjattiin 16.11.2026 kenttätestin (`BugReport-2026-11-18.md`) perusteella tunnistetut bugit (`BUG-1`–`BUG-8`):
+- **BUG-1 (`.onion`-yhteydet & Hidden Service)**:
+  - `ConnectionManager.sendMessage()` nosti connect-timeoutin 30 s → **90 s** (`ONION_CONNECT_TIMEOUT_MS`), asetti `socket.soTimeout = 60_000`, ja lisäsi automaattisen **3 yrityksen uudelleenyrityssilmukan** (5 s * yritys -viiveellä).
+  - `SamizdatTorManager.setupHiddenService()` kutsuu nyt `conn.addOnion(..., discardPK = false, detach = true)` (`Detach`-lippu), tallentaa osoitteen `filesDir/onion_v3_hostname`-tiedostoon ja toipuu mahdollisesta samassa prosessissa tapahtuvasta `collision`-virheestä.
+- **BUG-2 & BUG-3 (`BackHandler` & ViewModel-riippuvuudet)**:
+  - `MainScreen` (`MainActivity.kt`) käsittelee Back-painikkeen: poistuu pickup-valinnasta, palaa muilta välilehdiltä `MAP`-välilehdelle ja siirtää `MAP`-välilehdellä sovelluksen taustalle (`moveTaskToBack(true)`) tuhoamatta `MainActivity`:a, `PeersViewModel`:ia tai Toria.
+  - `SamizdatTorManager`, `ConnectionManager`, `PeerRepository`, `UpdateManager`, `ApkSeeder`, `SegmentManager` ja `TorTileDownloader.socksPortProvider` luodaan nyt `PeersViewModelFactory.create()`-metodin sisällä, joten näytön kääntö tai teeman vaihto ei luo ylimääräisiä käsittelijöitä eikä nollaa tiililataajan SOCKS-porttia.
+- **BUG-4 (`pingAllPeers` & taustaping)**:
+  - `PeersViewModel.pingAllPeers()` kirjaa virheet nyt myös `_debugLogs`-listaan (`PING FAILED`), estää päällekkäiset pingit samalle `.onion`-osoitteelle (`pingsInFlight`), ja 30 s taustasilmukka pingaa hiljaisesti offline-peerejä (`quiet = true`) silloin kun broadcast ei ole päällä.
+- **BUG-5 (Nostr-julkaisu & PoW-ajoitus)**:
+  - `NostrBootstrapManager.publishOurOnion()` odottaa 20 s ennen raskaan 22-bittisen PoW-louhinnan käynnistystä, jotta alkudiscovery ja ensimmäiset `.onion`-kättelyt ehtivät valmistua ensin.
+  - `broadcastToRelays()` odottaa NIP-01 `["OK", <event_id>, true, ...]` -kuittausta ennen `markPublished()`-kutsua; `NostrPoWMiner` lokittaa väliaikatulokset vain Logcatiin (`Log.d`) UI-lokin täyttymisen estämiseksi; WebSocket-yhteyden avautumiselle ja EOSE-vastaukselle annetaan dynaaminen odotus.
+- **BUG-6, BUG-7 & BUG-8 (UI-viilaukset)**:
+  - `ContactsScreen`: yhteystietokortin nimi/tähdet ja etäisyys omalla rivillään, `Onion: ...` omalla rivillään.
+  - `MapComposable`: poistettu päällekkäinen sininen `roadRoute`-viiva (säilytetty yksi syaani tiepohjainen reittiviiva + matkustajan suoran viivan vara).
+  - `SettingsScreen`: `Debug Logs` -rivikorkeudeksi asetettu `lineHeight = 13.sp`.

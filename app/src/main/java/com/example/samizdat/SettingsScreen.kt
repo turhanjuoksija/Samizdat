@@ -510,7 +510,13 @@ fun SettingsScreen(
                     Box(modifier = Modifier.height(150.dp)) {
                         LazyColumn {
                             items(viewModel.debugLogs) { log ->
-                                Text(log, color = Color.Green, fontSize = 10.sp, modifier = Modifier.padding(bottom = 2.dp))
+                                Text(
+                                    log,
+                                    color = Color.Green,
+                                    fontSize = 10.sp,
+                                    lineHeight = 13.sp,
+                                    modifier = Modifier.padding(bottom = 2.dp)
+                                )
                             }
                         }
                     }

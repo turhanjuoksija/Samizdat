@@ -14,7 +14,10 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Collections
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Manages the Bootstrap process via the Nostr Network.
@@ -82,6 +85,9 @@ class NostrBootstrapManager(private val context: Context) {
 
         scope.launch {
             try {
+                // Delay heavy PoW mining so initial discovery, update checks, and peer handshakes finish first
+                delay(STARTUP_PUBLISH_DELAY_MS)
+
                 Log.i(TAG, "Starting to publish our Onion to Nostr: $myOnionAddress")
                 onStatusUpdate("Nostr: Starting Bootstrapper...")
                 
@@ -115,18 +121,22 @@ class NostrBootstrapManager(private val context: Context) {
 
                 onStatusUpdate("Nostr: Broadcasting to Relays...")
 
-                // 5. Connect to relays and broadcast
+                // 5. Connect to relays and broadcast (wait for NIP-01 OK confirmation)
                 val eventJson = minedEvent.toJson()
                 val broadcastMessage = JSONArray().apply {
                     put("EVENT")
                     put(eventJson)
                 }.toString()
 
-                broadcastToRelays(broadcastMessage)
-                
-                // Mark successful publish so we don't repeat within 24h
-                markPublished(myOnionAddress)
-                onStatusUpdate("Nostr: Published successfully!")
+                val confirmedRelays = broadcastToRelays(broadcastMessage, minedEvent.id)
+                if (confirmedRelays > 0) {
+                    // Mark successful publish only after at least one relay confirmed receipt
+                    markPublished(myOnionAddress)
+                    onStatusUpdate("Nostr: Published to $confirmedRelays/${defaultRelays.size} relay(s)!")
+                } else {
+                    Log.w(TAG, "Nostr publish failed: no relay confirmed event ${minedEvent.id}")
+                    onStatusUpdate("Nostr: Publish failed (no relay confirmed)")
+                }
 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to publish onion to Nostr", e)
@@ -162,13 +172,21 @@ class NostrBootstrapManager(private val context: Context) {
 
             // Try to connect to at least one working relay
             for (relayUrl in defaultRelays) {
-                var connected = connectAndSubscribe(relayUrl, subscribeMessage) { onion, timestamp ->
+                val eoseReached = AtomicBoolean(false)
+                val connected = connectAndSubscribe(
+                    url = relayUrl,
+                    subscribeMessage = subscribeMessage,
+                    onEose = { eoseReached.set(true) }
+                ) { onion, timestamp ->
                     discoveredOnions[onion] = timestamp
                 }
                 
                 if (connected) {
-                    // Give it some time to receive the initial dump of events
-                    delay(3000)
+                    // Wait for initial dump of events (up to 4s or until EOSE)
+                    val dumpDeadline = System.currentTimeMillis() + RELAY_EOSE_WAIT_MS
+                    while (!eoseReached.get() && System.currentTimeMillis() < dumpDeadline) {
+                        delay(200)
+                    }
                     
                     // Sort by newest first & filter out our own address
                     val sortedOnions = discoveredOnions.entries
@@ -190,31 +208,85 @@ class NostrBootstrapManager(private val context: Context) {
         }
     }
 
-    private fun broadcastToRelays(message: String) {
+    private suspend fun broadcastToRelays(message: String, eventId: String): Int {
+        val confirmedCount = AtomicInteger(0)
+        val remaining = AtomicInteger(defaultRelays.size)
+        val sockets = Collections.synchronizedList(mutableListOf<WebSocket>())
+
         // For publishing, we want to hit multiple relays to ensure visibility
         defaultRelays.forEach { relayUrl ->
+            val finished = AtomicBoolean(false)
+            fun finishRelay() {
+                if (finished.compareAndSet(false, true)) {
+                    remaining.decrementAndGet()
+                }
+            }
+
             val request = Request.Builder().url(relayUrl).build()
-            client.newWebSocket(request, object : WebSocketListener() {
+            val ws = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.d(TAG, "Connected to $relayUrl for writing")
-                    webSocket.send(message)
-                    // Close gracefully after sending
-                    webSocket.close(1000, "Published")
+                    if (!webSocket.send(message)) {
+                        Log.w(TAG, "Failed to enqueue event on $relayUrl")
+                        finishRelay()
+                        webSocket.close(1000, "Send failed")
+                    }
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val arr = JSONArray(text)
+                        if (arr.optString(0) == "OK") {
+                            val ackEventId = arr.optString(1, "")
+                            if (ackEventId.isNotEmpty() && ackEventId != eventId) return
+                            val ok = arr.optBoolean(2, false)
+                            if (ok) {
+                                confirmedCount.incrementAndGet()
+                                Log.i(TAG, "Relay $relayUrl accepted event $eventId")
+                            } else {
+                                Log.w(TAG, "Relay $relayUrl rejected event $eventId: ${arr.optString(3)}")
+                            }
+                            finishRelay()
+                            webSocket.close(1000, "Done")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error parsing publish response from $relayUrl: ${e.message}")
+                    }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.w(TAG, "Failed to publish to $relayUrl: ${t.message}")
+                    finishRelay()
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    finishRelay()
                 }
             })
+            sockets.add(ws)
         }
+
+        val deadline = System.currentTimeMillis() + RELAY_PUBLISH_TIMEOUT_MS
+        while (remaining.get() > 0 && System.currentTimeMillis() < deadline) {
+            delay(200)
+        }
+
+        sockets.forEach { ws ->
+            try {
+                ws.close(1000, "Complete")
+            } catch (_: Exception) { }
+        }
+        return confirmedCount.get()
     }
 
     private suspend fun connectAndSubscribe(
         url: String, 
-        subscribeMessage: String, 
+        subscribeMessage: String,
+        onEose: () -> Unit = {},
         onAddressFound: (String, Long) -> Unit
     ): Boolean {
-        var isConnected = false
+        val isConnected = AtomicBoolean(false)
+        val hasFailed = AtomicBoolean(false)
         val request = Request.Builder().url(url).build()
 
         activeWebSocket?.close(1000, "Switching relays")
@@ -222,7 +294,7 @@ class NostrBootstrapManager(private val context: Context) {
         val webSocketListener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "Connected to $url for reading")
-                isConnected = true
+                isConnected.set(true)
                 webSocket.send(subscribeMessage)
             }
 
@@ -237,6 +309,7 @@ class NostrBootstrapManager(private val context: Context) {
                     } else if (type == "EOSE") {
                         // End of Stored Events
                         Log.d(TAG, "Reached EOSE for $url")
+                        onEose()
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing Nostr message: $text", e)
@@ -245,15 +318,18 @@ class NostrBootstrapManager(private val context: Context) {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "Failed to read from $url: ${t.message}")
-                isConnected = false
+                hasFailed.set(true)
+                isConnected.set(false)
             }
         }
         
         activeWebSocket = client.newWebSocket(request, webSocketListener)
 
-        // Wait a tiny bit for connection establishment
-        delay(1500)
-        return isConnected
+        val connectDeadline = System.currentTimeMillis() + RELAY_CONNECT_TIMEOUT_MS
+        while (!isConnected.get() && !hasFailed.get() && System.currentTimeMillis() < connectDeadline) {
+            delay(200)
+        }
+        return isConnected.get()
     }
 
     private fun handleIncomingEvent(eventJson: JSONObject, onAddressFound: (String, Long) -> Unit) {
@@ -334,13 +410,14 @@ class NostrBootstrapManager(private val context: Context) {
         subscribeMessage: String, 
         onManifest: (JSONObject) -> Unit
     ): Boolean {
-        var isConnected = false
+        val isConnected = AtomicBoolean(false)
+        val hasFailed = AtomicBoolean(false)
         val request = Request.Builder().url(url).build()
 
         val webSocketListener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "Connected to $url for reading updates")
-                isConnected = true
+                isConnected.set(true)
                 webSocket.send(subscribeMessage)
             }
 
@@ -363,13 +440,17 @@ class NostrBootstrapManager(private val context: Context) {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "Failed to read updates from $url: ${t.message}")
-                isConnected = false
+                hasFailed.set(true)
+                isConnected.set(false)
             }
         }
         
         client.newWebSocket(request, webSocketListener)
-        delay(1500)
-        return isConnected
+        val connectDeadline = System.currentTimeMillis() + RELAY_CONNECT_TIMEOUT_MS
+        while (!isConnected.get() && !hasFailed.get() && System.currentTimeMillis() < connectDeadline) {
+            delay(200)
+        }
+        return isConnected.get()
     }
 
     private fun handleIncomingUpdateEvent(
@@ -424,5 +505,9 @@ class NostrBootstrapManager(private val context: Context) {
         const val PUBLISH_INTERVAL_MS = 24L * 60 * 60 * 1000  // 24 hours
         private const val KEY_LAST_PUBLISH = "last_nostr_publish_ms"
         private const val KEY_LAST_ONION = "last_nostr_publish_onion"
+        private const val STARTUP_PUBLISH_DELAY_MS = 20_000L
+        private const val RELAY_CONNECT_TIMEOUT_MS = 5_000L
+        private const val RELAY_EOSE_WAIT_MS = 4_000L
+        private const val RELAY_PUBLISH_TIMEOUT_MS = 10_000L
     }
 }

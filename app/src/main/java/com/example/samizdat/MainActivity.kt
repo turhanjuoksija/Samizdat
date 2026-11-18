@@ -1,6 +1,7 @@
 package com.example.samizdat
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 
@@ -11,6 +12,7 @@ import android.security.keystore.KeyProperties
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -85,28 +87,11 @@ class MainActivity : ComponentActivity() {
         customConfig.userAgentValue = RoutingService.USER_AGENT
         customConfig.save(this, android.preference.PreferenceManager.getDefaultSharedPreferences(this))
         
-        // --- Dependency Injection (Manual) ---
-        val context = applicationContext
-        val db = AppDatabase.getDatabase(context)
-        val torManager = SamizdatTorManager(application)
-        val connectionManager = ConnectionManager()
-        val repository = PeerRepository(db.peerDao(), db.messageDao(), db.vouchDao(), db.rideIntentDao(), connectionManager)
-        val updateManager = UpdateManager(application, torManager)
-        // Serves this phone's own installed (signed-release) APK to peers over the onion service (§20)
-        val apkSeeder = ApkSeeder(application, updateManager.currentVersionCode)
-        connectionManager.httpHandler = { requestLine, headers, socket ->
-            apkSeeder.handleHttp(requestLine, headers, socket)
-        }
-        val segmentManager = SegmentManager(application) { torManager.socksPort.value }
-        // Map tiles are fetched only over Tor; hand out the port only once Tor is fully bootstrapped
-        TorTileDownloader.socksPortProvider = {
-            if (torManager.isBootstrapped.value) torManager.socksPort.value else null
-        }
-        
-        val factory = PeersViewModelFactory(repository, torManager, updateManager, segmentManager, apkSeeder)
+        // --- Dependency Injection (ViewModel-scoped so config changes don't recreate Tor/ConnectionManager) ---
+        val factory = PeersViewModelFactory(application)
         viewModel = ViewModelProvider(this, factory)[PeersViewModel::class.java]
 
-        val futureFactory = FutureRidesViewModelFactory(repository, viewModel)
+        val futureFactory = FutureRidesViewModelFactory(viewModel.repository, viewModel)
         futureRidesViewModel = ViewModelProvider(this, futureFactory)[FutureRidesViewModel::class.java]
 
         // Load saved nickname
@@ -232,6 +217,21 @@ fun MainScreen(
 
     // Navigation State
     var selectedTab by rememberSaveable { mutableStateOf(SamizdatTab.MAP) }
+
+    BackHandler(enabled = true) {
+        when {
+            selectedTab == SamizdatTab.MAP && viewModel.reviewingOffer != null -> {
+                viewModel.reviewingOffer = null
+                viewModel.reviewingPickupIndex = -1
+            }
+            selectedTab != SamizdatTab.MAP -> {
+                selectedTab = SamizdatTab.MAP
+            }
+            else -> {
+                (context as? Activity)?.moveTaskToBack(true)
+            }
+        }
+    }
 
     // Scanner logic
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->

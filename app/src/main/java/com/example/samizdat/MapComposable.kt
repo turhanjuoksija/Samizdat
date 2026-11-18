@@ -360,16 +360,7 @@ fun MapComposable(
                             map.overlays.add(destMarker)
                         }
                         
-                        if (viewModel?.roadRoute != null) {
-                             val line = Polyline()
-                             line.setPoints(viewModel.roadRoute)
-                             line.outlinePaint.color = Color.BLUE
-                             line.outlinePaint.strokeWidth = 5f
-                             if (viewModel.routeIsApproximate) {
-                                 line.outlinePaint.pathEffect = DashPathEffect(floatArrayOf(20f, 15f), 0f)
-                             }
-                             map.overlays.add(line)
-                        } else if (myRole != "DRIVER") {
+                        if (roadRoute == null && myRole != "DRIVER") {
                             val points = mutableListOf<org.osmdroid.util.GeoPoint>()
                             if (myLocation != null) points.add(myLocation)
                             if (viewModel != null) {
