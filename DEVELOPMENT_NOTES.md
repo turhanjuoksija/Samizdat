@@ -85,11 +85,15 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - Käytämme tällä hetkellä `fallbackToDestructiveMigration()` asetusta.
 - **Varoitus**: Jokainen `version` numeron korotus `AppDatabase.kt` tiedostossa **PYYHKII KAIKKI TIEDOT**.
 
-## 9. Verkkoviestintä & Aikakatkaisut ⏳
-- **Timeout (lähetys)**: `ConnectionManager.sendMessage()` käyttää 30 sekunnin connect-timeoutia Tor-yhteyksille.
+## 9. Verkkoviestintä & Aikakatkaisut (KRIITTINEN) ⏳
+- **Loopback-sidonta (`127.0.0.1`, EI `getLoopbackAddress()`)**:
+  - `ConnectionManager.startListening()` **TÄYTYY** sitoa eksplisiittisesti IPv4-osoitteeseen `127.0.0.1` (`InetAddress.getByAddress("localhost", byteArrayOf(127, 0, 0, 1))`), jotta se täsmää `SamizdatTorManager`in `ADD_ONION Port=80,127.0.0.1:12345` -ohjaukseen.
+  - **ÄLÄ KOSKAAN** käytä `InetAddress.getLoopbackAddress()`-kutsua Androidilla: Androidin AOSP-toteutus palauttaa aina IPv6-osoitteen `::1`, jolloin Torin yhteys `127.0.0.1:12345`:een hylätään ja kaikki saapuvat `.onion`-viestit kaatuvat virheeseen `SOCKS server general failure` (ks. §22).
+- **Timeout & Retry (lähetys, 90 s + 3 yritystä)**:
+  - `ConnectionManager.sendMessage()` käyttää **90 sekunnin** connect-timeoutia (`ONION_CONNECT_TIMEOUT_MS = 90_000`), 60 sekunnin lukutimeoutia (`SOCKET_TIMEOUT_MS = 60_000`) ja **3 yrityksen uudelleenyritystä** (`SEND_MAX_ATTEMPTS = 3`, viive 5 s / 10 s).
+  - **ÄLÄ** laske connect-timeoutia takaisin 30 sekuntiin tai poista uudelleenyrityksiä: mobiiliverkossa (4G) HSv3-kuvauksen haku, vanhentuneen descriptorin päivitys ja 6 hypyn Rendezvous-piirin muodostus kestää usein 45–80 sekuntia.
 - **Timeout (vastaanotto)**: Idle-yhteydet katkaistaan automaattisesti 60 sekunnin jälkeen (`SOCKET_TIMEOUT_MS`).
 - **Viestin kokorajoitus**: Yksittäinen viesti saa olla enintään 64 KB (`MAX_MESSAGE_SIZE = 65_536`). Ylitys katkaisee yhteyden.
-- **Nopeusrajoitus**: Enintään 30 viestiä / 60 sekuntia per IP-osoite (`RATE_LIMIT_MAX_MESSAGES`). Ylitys palauttaa `RATE_LIMITED`.
 - **Background Sync**: DHT-haku ja Status Broadcast tapahtuvat taustasäikeissä (`viewModelScope`) jumiutumisen välttämiseksi.
 
 ## 11. Tekninen ympäristö & Kääntäminen (Java 17) ☕

@@ -30,6 +30,8 @@ class ConnectionManager {
         private const val MAX_HTTP_LINE = 4_096
         private const val MAX_HTTP_HEADER_BYTES = 8_192
         private const val MAX_HTTP_HEADERS = 50
+        // CRITICAL (DO NOT LOWER TO 30s): Tor HSv3 descriptor fetch + 6-hop rendezvous circuit on mobile data
+        // frequently takes 45-80s and may need a retry when cached intro points are stale (DEVELOPMENT_NOTES §9, §22).
         private const val ONION_CONNECT_TIMEOUT_MS = 90_000
         private const val SEND_MAX_ATTEMPTS = 3
         private const val SEND_RETRY_DELAY_MS = 5_000L

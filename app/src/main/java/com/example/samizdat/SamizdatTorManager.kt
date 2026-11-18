@@ -282,7 +282,10 @@ class SamizdatTorManager(private val context: Application) {
     private fun setupHiddenService(conn: TorControlConnection) {
         Log.i(TAG, "Setting up Hidden Service...")
 
-        // Virtual port 80 -> local server on 12345 (PeerRepository/ConnectionManager).
+        // CRITICAL: Virtual port 80 -> local IPv4 127.0.0.1:12345.
+        // ConnectionManager.startListening() MUST bind to IPv4 127.0.0.1 (never InetAddress.getLoopbackAddress(),
+        // which returns IPv6 ::1 on Android and breaks all incoming onion connections; see DEVELOPMENT_NOTES §9 & §22).
+        // Also pass detach=true in addOnion() below so the Hidden Service survives control-connection hiccups.
         val ports = mapOf(80 to "127.0.0.1:12345")
         val existingKey = loadPrivateKey()
 
