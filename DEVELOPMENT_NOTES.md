@@ -1,6 +1,9 @@
 # Samizdat Development & Versioning Notes 🛡️
 
-## 🚨 Pending Verification (Requires 2-Device Testing) 📱📱
+## 🚨 Pending Verification & Upcoming Tasks 📱📱
+- [ ] **2-Device Messaging (Build 22)**: Confirm that `.onion` handshake, ping, and chat work end-to-end after the `127.0.0.1` loopback bind fix (§22).
+- [ ] **TODO (Privacy / Nostr over Tor)**: `NostrBootstrapManager` käyttää suoraa `OkHttpClient`-yhteyttä ilman Torin SOCKS-proxya, eli Nostr-relay-palvelimet näkevät laitteen oikean IP-osoitteen yhdessä julkaistun `.onion`-osoitteen kanssa. Reititetään Nostr WebSocket -yhteydet Torin SOCKS-portin (`torManager.socksPort.value` + `InetSocketAddress.createUnresolved` tai OkHttp SOCKS DNS-eristys) kautta heti kun perusviestintä on varmistettu (ks. §16).
+- [ ] **TODO (Chat / Messages Cleanup & UX)**: Viestiketjuihin (`Messages` / `ChatScreen`) poistomahdollisuus / piilotus (kuten kontaktien roskakori), vanhojen ketjujen automaattinen vanheneminen ("maatuminen"), suodatus ja muut viestinäkymän parannukset (ks. `video/2026-11-18_v22/Screenshot_20261118-223825.png`).
 - [ ] **Map Visuals**: Confirm that passengers see "Car 🚗" icons for real-time driver locations and "Signal 📡" for grid-based offers.
 - [ ] **Map Interactions**: Confirm that the "Accept ✅ / Decline ❌" dialog appears correctly on the map for passengers and triggers the correct flow.
 - [ ] **Offer Deduplication**: Confirm that only one offer appears per driver on the map/list (latest wins).
@@ -156,6 +159,7 @@ Sovellus käyttää Tor-verkon `.onion` osoitteita vertaisviestintään, mutta u
   - Vain viestit, joiden PoW-vaatimus täyttyy, hyväksytään muilta.
 - **Tallennetut Tapahtumat ja Expiration (NIP-01 & NIP-40)**: Käytämme Nostr *Replaceable* Kind `10337`.  Nämä tallentuvat Relay-palvelimille. Jotta roskan määrä pysyy kurissa, lisäämme eventtiin NIP-40 `"expiration"` -tagin (7 päivää eteenpäin), jolloin Relay voi siivota sen automaattisesti pois.
 - **Rate-Limiting**: Puhelin julkaisee ja louhii PoW:n vain **kerran 24 tunnissa** (käytämme SharedPreferencesia tämän muistamiseen), paitsi jos `.onion` -osoite muuttuu, jolloin se julkaistaan välittömästi. Samalla oma sipuliosoite suodatetaan pois löydetyistä tuloksista.
+- **TODO (Tietosuoja — Nostr kulkee vielä Torin ohi)**: `NostrBootstrapManager.kt` käyttää tällä hetkellä tavallista `OkHttpClient`:iä ilman SOCKS-proxya, jolloin Nostr-palvelimet näkevät puhelimen IP-osoitteen yhdessä julkaistun `.onion`-osoitteen kanssa. Korjataan erikseen reitittämällä Nostr-yhteydet Torin dynaamisen SOCKS-portin kautta (ja estämällä paikallinen DNS-vuoto kuten `TorTileDownloader`issa), kunhan kahden puhelimen `.onion`-viestintä on ensin varmistettu toimivaksi.
 
 ## 17. App Update Gossiping (Nostr + P2P) - 23.2.2026 🔄
 Sovelluksen päivitykset levitetään P2P-verkossa ilman erillistä käyttöliittymää (Developer UI) sovelluksessa.
