@@ -56,6 +56,14 @@ class PeerRepository(
         messageDao.updateMessage(message)
     }
 
+    suspend fun deleteMessagesForPeer(peerPk: String) {
+        messageDao.deleteMessagesForPeer(peerPk)
+    }
+
+    suspend fun findPeerKeysMatchingMessageContent(query: String): List<String> {
+        return messageDao.findPeerKeysMatchingMessageContent(query)
+    }
+
     // Ride Intent Operations
     // private val rideIntentDao = ... (injected)
 

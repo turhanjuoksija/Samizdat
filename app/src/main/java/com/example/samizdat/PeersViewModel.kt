@@ -128,6 +128,30 @@ class PeersViewModel(
     // ========== PASSENGER PICKUP FLOW STATE ==========
     var reviewingOffer by mutableStateOf<KademliaNode.GridMessage?>(null)
     var reviewingPickupIndex by mutableIntStateOf(-1)
+
+    // ========== PERSISTENT CHAT TAB STATE ==========
+    var activeChatPeerKey by mutableStateOf<String?>(null)
+        private set
+    var chatSearchQuery by mutableStateOf("")
+    val chatDrafts = androidx.compose.runtime.mutableStateMapOf<String, String>()
+    val chatScrollPositions = mutableMapOf<String, Pair<Int, Int>>()
+    var chatListScrollPosition: Pair<Int, Int> = 0 to 0
+
+    fun openChat(peerKey: String) {
+        activeChatPeerKey = peerKey
+    }
+
+    fun closeChat() {
+        activeChatPeerKey = null
+    }
+
+    fun updateChatDraft(peerKey: String, text: String) {
+        if (text.isEmpty()) {
+            chatDrafts.remove(peerKey)
+        } else {
+            chatDrafts[peerKey] = text
+        }
+    }
     
     // ========== DELEGATED PROPERTIES (from RouteManager) ==========
     
@@ -551,7 +575,7 @@ class PeersViewModel(
                             type = type
                         ))
                         val logPrefix = if (type == "ride_request") "RIDE REQUEST" else "INBOUND"
-                        addLog("$logPrefix from ${senderNick ?: resolvedPeer?.nickname ?: finalPk}: $messageText")
+                        addLog("$logPrefix from ${senderNick ?: resolvedPeer?.nickname ?: finalPk} (${messageText.length} chars)")
                         
                         // Auto-start tracking if accepted
                         if (type == "ride_accept" && !activeRidePeers.contains(finalPk)) {
@@ -642,10 +666,38 @@ class PeersViewModel(
         }
     }
 
-    fun deletePeer(peer: Peer) {
+    fun deletePeer(peer: Peer, deleteChats: Boolean = false) {
         viewModelScope.launch {
             repository.deletePeer(peer)
+            if (deleteChats) {
+                deleteConversationInternal(peer.publicKey, peer.onion)
+            }
         }
+    }
+
+    fun deleteConversation(peerKey: String) {
+        viewModelScope.launch {
+            val matchingPeer = storedPeers.first().find { it.publicKey == peerKey || it.onion == peerKey }
+            deleteConversationInternal(peerKey, matchingPeer?.onion, matchingPeer?.publicKey)
+        }
+    }
+
+    private suspend fun deleteConversationInternal(vararg keys: String?) {
+        val uniqueKeys = keys.filterNotNull().filter { it.isNotBlank() }.distinct()
+        uniqueKeys.forEach { key ->
+            repository.deleteMessagesForPeer(key)
+            chatDrafts.remove(key)
+            chatScrollPositions.remove(key)
+        }
+        if (activeChatPeerKey != null && activeChatPeerKey in uniqueKeys) {
+            activeChatPeerKey = null
+        }
+    }
+
+    suspend fun searchConversationPeerKeys(query: String): Set<String> {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return emptySet()
+        return repository.findPeerKeysMatchingMessageContent(trimmed).toSet()
     }
 
     fun sendMessage(peer: Peer, message: String, myNickname: String, type: String = "text") {
@@ -659,43 +711,58 @@ class PeersViewModel(
                 type = type
             )
             val msgId = repository.saveMessage(initialMsg)
+            deliverChatMessage(initialMsg.copy(id = msgId), peer, myNickname)
+        }
+    }
 
-            try {
-                addLog("OUTBOUND to ${peer.nickname}: Connecting...")
-                
-                val myOnion = torManager.onionAddress.value ?: "unknown"
-                val json = org.json.JSONObject().apply {
-                    put("v", 1)
-                    put("f_onion", myOnion)
-                    put("f_nick", myNickname)
-                    put("role", myRole)
-                    put("seats", mySeats)
-                    put("info", myInfo)
-                    put("lat", myLatitude)
-                    put("lon", myLongitude)
-                    put("d_lat", myDestLat)
-                    put("d_lon", myDestLon)
-                    put("t", System.currentTimeMillis())
-                    put("type", type)
-                    put("p", message)
-                }
-                val payload = json.toString()
-                
-                val currentSocksPort = torManager.socksPort.value
-                if (currentSocksPort == null) {
-                    repository.updateMessage(initialMsg.copy(id = msgId, status = "FAILED"))
-                    addLog("ERROR: Tor SOCKS port not available")
-                    return@launch
-                }
-                repository.sendMessage(peer.lastKnownIp, payload, currentSocksPort)
-                markPeerAlive(peer.onion ?: peer.lastKnownIp)
-                
-                repository.updateMessage(initialMsg.copy(id = msgId, status = "DELIVERED"))
-                addLog("OUTBOUND to ${peer.nickname}: DELIVERED")
-            } catch (e: Exception) {
-                repository.updateMessage(initialMsg.copy(id = msgId, status = "FAILED"))
-                addLog("ERROR sending to ${peer.nickname}: ${e.message}")
+    fun retryMessage(msg: ChatMessage, peer: Peer, myNickname: String) {
+        viewModelScope.launch {
+            val retryingMsg = msg.copy(
+                timestamp = System.currentTimeMillis(),
+                status = "PENDING"
+            )
+            repository.updateMessage(retryingMsg)
+            deliverChatMessage(retryingMsg, peer, myNickname)
+        }
+    }
+
+    private suspend fun deliverChatMessage(msg: ChatMessage, peer: Peer, myNickname: String) {
+        try {
+            addLog("OUTBOUND to ${peer.nickname}: Connecting...")
+
+            val myOnion = torManager.onionAddress.value ?: "unknown"
+            val json = org.json.JSONObject().apply {
+                put("v", 1)
+                put("f_onion", myOnion)
+                put("f_nick", myNickname)
+                put("role", myRole)
+                put("seats", mySeats)
+                put("info", myInfo)
+                put("lat", myLatitude)
+                put("lon", myLongitude)
+                put("d_lat", myDestLat)
+                put("d_lon", myDestLon)
+                put("t", msg.timestamp)
+                put("type", msg.type)
+                put("p", msg.content)
             }
+            val payload = json.toString()
+
+            val currentSocksPort = torManager.socksPort.value
+            if (currentSocksPort == null) {
+                repository.updateMessage(msg.copy(status = "FAILED"))
+                addLog("ERROR: Tor SOCKS port not available")
+                return
+            }
+            val targetAddress = peer.onion ?: peer.lastKnownIp
+            repository.sendMessage(targetAddress, payload, currentSocksPort)
+            markPeerAlive(targetAddress)
+
+            repository.updateMessage(msg.copy(status = "DELIVERED"))
+            addLog("OUTBOUND to ${peer.nickname}: DELIVERED")
+        } catch (e: Exception) {
+            repository.updateMessage(msg.copy(status = "FAILED"))
+            addLog("ERROR sending to ${peer.nickname}: ${e.message}")
         }
     }
 

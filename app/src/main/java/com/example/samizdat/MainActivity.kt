@@ -198,9 +198,6 @@ fun MainScreen(
     val context = LocalContext.current
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     
-    // Dialog State
-    var showMessageDialog by remember { mutableStateOf<Peer?>(null) }
-    
     // State Observation
     val savedPeers by viewModel.storedPeers.collectAsState(initial = emptyList())
 
@@ -220,6 +217,9 @@ fun MainScreen(
 
     BackHandler(enabled = true) {
         when {
+            selectedTab == SamizdatTab.MESSAGES && viewModel.activeChatPeerKey != null -> {
+                viewModel.closeChat()
+            }
             selectedTab == SamizdatTab.MAP && viewModel.reviewingOffer != null -> {
                 viewModel.reviewingOffer = null
                 viewModel.reviewingPickupIndex = -1
@@ -316,15 +316,6 @@ fun MainScreen(
         onDispose {
             locationCallback?.let { locationClient?.removeLocationUpdates(it) }
         }
-    }
-
-    if (showMessageDialog != null) {
-        MessageDialog(
-            peer = showMessageDialog!!,
-            viewModel = viewModel,
-            myNickname = myNickname,
-            onDismiss = { showMessageDialog = null }
-        )
     }
 
     // --- P2P Signed App Update Dialogs (Phase C) ---
@@ -433,7 +424,10 @@ fun MainScreen(
                     ContactsScreen(
                         viewModel = viewModel,
                         savedPeers = filteredContacts,
-                        onPeerClick = { showMessageDialog = it },
+                        onPeerClick = { peer ->
+                            viewModel.openChat(peer.publicKey)
+                            selectedTab = SamizdatTab.MESSAGES
+                        },
                         onScanQrClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }
                     )
                 }
@@ -520,76 +514,6 @@ fun MainScreen(
             }
         }
     }
-}
-
-@Composable
-fun MessageDialog(peer: Peer, viewModel: PeersViewModel, myNickname: String, onDismiss: () -> Unit) {
-    var messageText by remember { mutableStateOf("") }
-    val messages by viewModel.getMessagesForPeer(peer.publicKey).collectAsState(initial = emptyList())
-    
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Chat with ${peer.nickname}") },
-        text = {
-            Column {
-                // Message History
-                Box(modifier = Modifier.height(200.dp).fillMaxWidth()) {
-                    LazyColumn(reverseLayout = true) {
-                        items(messages.reversed()) { msg ->
-                            val color = if (msg.isIncoming) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primaryContainer
-                            val align = if (msg.isIncoming) Alignment.Start else Alignment.End
-                            
-                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalAlignment = align) {
-                                Surface(shape = MaterialTheme.shapes.medium, color = color) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(text = msg.content, modifier = Modifier.padding(8.dp))
-                                        if (!msg.isIncoming) {
-                                            val statusIcon = when (msg.status) {
-                                                "PENDING" -> "⌛"
-                                                "DELIVERED" -> "✔️✔️"
-                                                "FAILED" -> "❌"
-                                                else -> "✅" // SENT
-                                            }
-                                            Text(
-                                                text = statusIcon, 
-                                                style = MaterialTheme.typography.labelSmall, 
-                                                color = if (msg.status == "FAILED") Color.Red else Color.Unspecified,
-                                                modifier = Modifier.padding(end = 6.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                OutlinedTextField(
-                    value = messageText,
-                    onValueChange = { messageText = it },
-                    label = { Text("Message") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = { 
-                if (messageText.isNotEmpty()) {
-                    viewModel.sendMessage(peer, messageText, myNickname) 
-                    messageText = ""
-                }
-            }) {
-                Text("Send")
-            }
-        },
-        dismissButton = {
-            Button(onClick = onDismiss) {
-                Text("Close")
-            }
-        }
-    )
 }
 
 // --- Helpers --- (Same as before, omitted for brevity if unchanged, but included for complete file rewrite)

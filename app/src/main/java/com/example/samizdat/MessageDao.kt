@@ -32,5 +32,14 @@ interface MessageDao {
     @Update
     suspend fun updateMessage(message: ChatMessage)
 
+    @Query("DELETE FROM messages WHERE peerPublicKey = :peerPk")
+    suspend fun deleteMessagesForPeer(peerPk: String)
+
+    @Query("""
+        SELECT DISTINCT peerPublicKey FROM messages
+        WHERE type != 'ride_request' AND type != 'status'
+        AND content LIKE '%' || :query || '%'
+    """)
+    suspend fun findPeerKeysMatchingMessageContent(query: String): List<String>
 
 }

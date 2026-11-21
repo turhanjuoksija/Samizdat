@@ -26,6 +26,8 @@ fun ContactsScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var showAddDialog by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var peerToDelete by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Peer?>(null) }
+    var alsoDeleteChats by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(true) }
     // Observe live peer state changes
     val livePeersMap = viewModel.livePeerTimestamps.toMap()
     val nowMs = System.currentTimeMillis()
@@ -125,7 +127,10 @@ fun ContactsScreen(
                                 Text("Vouch", fontSize = 10.sp)
                             }
 
-                            IconButton(onClick = { viewModel.deletePeer(peer) }) {
+                            IconButton(onClick = {
+                                alsoDeleteChats = true
+                                peerToDelete = peer
+                            }) {
                                 Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
                             }
                         }
@@ -240,6 +245,52 @@ fun ContactsScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { showAddDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (peerToDelete != null) {
+            val target = peerToDelete!!
+            AlertDialog(
+                onDismissRequest = { peerToDelete = null },
+                title = { Text("Delete Contact") },
+                text = {
+                    Column {
+                        Text("Remove ${target.nickname} from your contacts?")
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { alsoDeleteChats = !alsoDeleteChats }
+                        ) {
+                            Checkbox(
+                                checked = alsoDeleteChats,
+                                onCheckedChange = { alsoDeleteChats = it }
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Also delete chat history",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.deletePeer(target, deleteChats = alsoDeleteChats)
+                            peerToDelete = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("Delete")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { peerToDelete = null }) {
                         Text("Cancel")
                     }
                 }
