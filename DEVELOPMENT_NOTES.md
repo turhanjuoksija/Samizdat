@@ -1,8 +1,8 @@
 # Samizdat Development & Versioning Notes 🛡️
 
 ## 🚨 Pending Verification & Upcoming Tasks 📱📱
-- [ ] **2-Device Messaging (Build 22)**: Confirm that `.onion` handshake, ping, and chat work end-to-end after the `127.0.0.1` loopback bind fix (§22).
-- [ ] **TODO (Privacy / Nostr over Tor)**: `NostrBootstrapManager` käyttää suoraa `OkHttpClient`-yhteyttä ilman Torin SOCKS-proxya, eli Nostr-relay-palvelimet näkevät laitteen oikean IP-osoitteen yhdessä julkaistun `.onion`-osoitteen kanssa. Reititetään Nostr WebSocket -yhteydet Torin SOCKS-portin (`torManager.socksPort.value` + `InetSocketAddress.createUnresolved` tai OkHttp SOCKS DNS-eristys) kautta heti kun perusviestintä on varmistettu (ks. §16).
+- [ ] **2-Device Messaging (Build 22)**: Confirm that `.onion` handshake, ping, and chat work end-to-end after the `127.0.0.1` loopback bind fix (§17).
+- [ ] **TODO (Privacy / Nostr over Tor)**: `NostrBootstrapManager` käyttää suoraa `OkHttpClient`-yhteyttä ilman Torin SOCKS-proxya, eli Nostr-relay-palvelimet näkevät laitteen oikean IP-osoitteen yhdessä julkaistun `.onion`-osoitteen kanssa. Reititetään Nostr WebSocket -yhteydet Torin SOCKS-portin (`torManager.socksPort.value` + `InetSocketAddress.createUnresolved` tai OkHttp SOCKS DNS-eristys) kautta heti kun perusviestintä on varmistettu (ks. §14).
 - [ ] **TODO (Chat / Messages Cleanup & UX)**: Viestiketjuihin (`Messages` / `ChatScreen`) poistomahdollisuus / piilotus (kuten kontaktien roskakori), vanhojen ketjujen automaattinen vanheneminen ("maatuminen"), suodatus ja muut viestinäkymän parannukset (ks. `video/2026-11-18_v22/Screenshot_20261118-223825.png`).
 - [ ] **Map Visuals**: Confirm that passengers see "Car 🚗" icons for real-time driver locations and "Signal 📡" for grid-based offers.
 - [ ] **Map Interactions**: Confirm that the "Accept ✅ / Decline ❌" dialog appears correctly on the map for passengers and triggers the correct flow.
@@ -11,7 +11,7 @@
 Tämä tiedosto sisältää kriittisiä huomioita projektin riippuvuuksista ja pakkausasetuksista. Lue tämä ennen kuin päivität kirjastoja tai muutat Gradle-asetuksia!
 
 ## 1. Tor & Native Libraries (Packaging) 📦
-Tor ajetaan **sovelluksen omassa prosessissa** Guardian Projectin `tor-android`-kirjastolla (`info.guardianproject:tor-android`, JNI `libtor.so` + `TorService`). Ohjaus `jtorctl`:llä (`info.guardianproject:jtorctl`). (Vaihdettu kmp-torista 2.11.2026, ks. §19.)
+Tor ajetaan **sovelluksen omassa prosessissa** Guardian Projectin `tor-android`-kirjastolla (`info.guardianproject:tor-android:0.4.9.14`, JNI `libtor.so` + `TorService`). Ohjaus `jtorctl`:llä (`info.guardianproject:jtorctl:0.4.5.7`) + `androidx.localbroadcastmanager`.
 - **Packaging**: `build.gradle.kts` → `packaging.jniLibs`: `pickFirsts`/`keepDebugSymbols` vain `libtor.so`:lle. `libtorexec.so`/`libevent.so` -säännöt poistettu (ei enää käytössä).
 - **compileSdk**: tor-android 0.4.9.12+ vaatii compile SDK **37.1** (AAR: `minCompileSdk=37`, `minCompileMinorSdk=1`) → `compileSdk { version = release(37) { minorApiLevel = 1 } }`. `targetSdk` on erikseen (34).
 - **kapt + Java 24 -tavukoodi (TÄRKEÄ)**: tor-androidin luokat ovat class 68 (Java 24). kapt kääntää Kotlin-luokista Java-stubit JDK 17:n javacilla, joka ei osaa lukea niitä ("class file has wrong version 68.0"). Siksi `TorService`-tyyppiä **ei saa** käyttää kentän, parametrin tai paluuarvon tyyppinä missään tämän moduulin Kotlin-luokassa, vain funktioiden rungoissa (`SamizdatTorManager.torService: Service?` + cast). Pysyvä korjaus: Room → KSP (poistaa kaptin) tai JDK 24+ toolchain.
@@ -24,11 +24,15 @@ AGP 8.x + Kotlin 1.9.x aikainen "Duplicate archive copy" -ongelma. `kotlinx-meta
 - **Sääntö**: `META-INF/INDEX.LIST` ja `DEPENDENCIES` on asetettu `excludes` listalle.
 - **Room + Kotlin-versio**: Room 2.8.5:n kapt-prosessori lukee vain Kotlin-metadataa <= 2.3.0. Kotlin 2.4 → `kaptDebugKotlin` kaatuu ("Metadata instance has version 2.4.0"). Siksi Kotlin on lukittu **2.3.x**:ään juuren `build.gradle.kts`:ssä. Nosta vasta, kun Room tukee 2.4:ää tai siirrytään KSP:hen.
 
-## 3. Tor Konfiguraatio (SOCKS Port) 🔌
+## 3. Tor Konfiguraatio (SOCKS Port & Hidden Service) 🔌
 - **torrc**: `SamizdatTorManager` kirjoittaa ennen käynnistystä `TorService.getTorrc(context)` → `SOCKSPort auto` + `HTTPTunnelPort 0`. torrc ohittaa TorServicen `torrc-defaults`-tiedoston, joka muuten valitsisi 9050/8118 jos vapaana.
 - **Portin luku**: kun TorService lähettää `STATUS_ON`, portti luetaan `GETINFO net/listeners/socks` (muoto `"127.0.0.1:NNNN"`) → `socksPort`.
 - **Portti**: SOCKS-portti tulee aina lukea dynaamisesti `torManager.socksPort.value` kautta. **ÄLÄ** käytä hardkoodattua porttia 9050.
 - **setEvents**: Jos kutsut `TorControlConnection.setEvents(...)`, listassa on oltava `STATUS_CLIENT`, muuten TorService ei tunnista valmistumista. Bootstrap-% tulee `STATUS_CLIENT … BOOTSTRAP PROGRESS=NN` -tapahtumista (raw event listener).
+- **Onion-avain & Hidden Service**: `filesDir/onion_v3_private_key` sisältää 64 tavua raakaa ED25519-laajennettua avainta. Olemassa oleva avain → `ADD_ONION ED25519-V3:<base64>`; uusi → `NEW:ED25519-V3` (tallennetaan vain jos tasan 64 tavua; lokiin kirjataan vain pituus). Kutsutaan `detach = true`, osoite tallennetaan `filesDir/onion_v3_hostname`-tiedostoon, ja virtuaaliportti 80 ohjataan kohteeseen `127.0.0.1:12345`.
+- **Uudelleenkäynnistys samassa prosessissa**: Tor ajetaan JNI:llä (`tor_run_main`), ja TorServicessa on staattinen lukko (tor bug #23847). `startTor()` odottaa vähintään 5 s edellisen `stopTor()`-kutsun jälkeen.
+- **Elinkaari & `PeersViewModelFactory`**: `MainScreen`in (`MainActivity.kt`) `BackHandler` siirtää `MAP`-välilehdellä sovelluksen taustalle (`moveTaskToBack(true)`) tuhoamatta `MainActivity`:a, `PeersViewModel`:ia tai Toria. `SamizdatTorManager`, `ConnectionManager`, `PeerRepository`, `UpdateManager`, `ApkSeeder`, `SegmentManager` ja `TorTileDownloader.socksPortProvider` luodaan aina `PeersViewModelFactory.create()`-metodissa (ei `MainActivity.onCreate()`issa), jotta konfiguraatiomuutokset eivät luo duplikaatteja eivätkä nollaa tiililataajan SOCKS-porttia.
+- **kmp-tor-siivous**: Ensimmäisellä käynnistyksellä poistetaan vanhat `filesDir/torservice` ja `cacheDir/torservice` (avaintiedostoon ei kosketa; tor-androidin omat hakemistot ovat `app_TorService` ja `cacheDir/TorService`).
 
 ## 4. Samizdat Envelope Protocol (v1 & v2 DHT) 📨
 Viestit kulkevat JSON-kääreessä ("Envelope").
@@ -91,7 +95,7 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 ## 9. Verkkoviestintä & Aikakatkaisut (KRIITTINEN) ⏳
 - **Loopback-sidonta (`127.0.0.1`, EI `getLoopbackAddress()`)**:
   - `ConnectionManager.startListening()` **TÄYTYY** sitoa eksplisiittisesti IPv4-osoitteeseen `127.0.0.1` (`InetAddress.getByAddress("localhost", byteArrayOf(127, 0, 0, 1))`), jotta se täsmää `SamizdatTorManager`in `ADD_ONION Port=80,127.0.0.1:12345` -ohjaukseen.
-  - **ÄLÄ KOSKAAN** käytä `InetAddress.getLoopbackAddress()`-kutsua Androidilla: Androidin AOSP-toteutus palauttaa aina IPv6-osoitteen `::1`, jolloin Torin yhteys `127.0.0.1:12345`:een hylätään ja kaikki saapuvat `.onion`-viestit kaatuvat virheeseen `SOCKS server general failure` (ks. §22).
+  - **ÄLÄ KOSKAAN** käytä `InetAddress.getLoopbackAddress()`-kutsua Androidilla: Androidin AOSP-toteutus palauttaa aina IPv6-osoitteen `::1`, jolloin Torin yhteys `127.0.0.1:12345`:een hylätään ja kaikki saapuvat `.onion`-viestit kaatuvat virheeseen `SOCKS server general failure` (ks. §17).
 - **Timeout & Retry (lähetys, 90 s + 3 yritystä)**:
   - `ConnectionManager.sendMessage()` käyttää **90 sekunnin** connect-timeoutia (`ONION_CONNECT_TIMEOUT_MS = 90_000`), 60 sekunnin lukutimeoutia (`SOCKET_TIMEOUT_MS = 60_000`) ja **3 yrityksen uudelleenyritystä** (`SEND_MAX_ATTEMPTS = 3`, viive 5 s / 10 s).
   - **ÄLÄ** laske connect-timeoutia takaisin 30 sekuntiin tai poista uudelleenyrityksiä: mobiiliverkossa (4G) HSv3-kuvauksen haku, vanhentuneen descriptorin päivitys ja 6 hypyn Rendezvous-piirin muodostus kestää usein 45–80 sekuntia.
@@ -99,7 +103,7 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - **Viestin kokorajoitus**: Yksittäinen viesti saa olla enintään 64 KB (`MAX_MESSAGE_SIZE = 65_536`). Ylitys katkaisee yhteyden.
 - **Background Sync**: DHT-haku ja Status Broadcast tapahtuvat taustasäikeissä (`viewModelScope`) jumiutumisen välttämiseksi.
 
-## 11. Tekninen ympäristö & Kääntäminen (Java 17) ☕
+## 10. Tekninen ympäristö & Kääntäminen (Java 17) ☕
 - **Versiot (2.11.2026)**: AGP **9.4.1**, Gradle **9.8.2**, Kotlin **2.3.21** (lukittu, ks. §2), compile SDK **37.1**, targetSdk 34, Java/JVM target **17**.
 - **AGP 9 built-in Kotlin**: `org.jetbrains.kotlin.android`-pluginia **ei** sovelleta `app/`-moduulissa (juuressa `apply false` vain Kotlin-version lukitsemiseksi). kapt tulee `com.android.legacy-kapt`-pluginista, Compose `org.jetbrains.kotlin.plugin.compose`-pluginista (ei `composeOptions`ia). `kotlinOptions {}` → `kotlin { compilerOptions { … } }`.
 - **Java versio**: AGP 9.4 vaatii **JDK 17**. HUOM: tor-androidin Java 24 -tavukoodi rikkoo kaptin, jos `TorService` päätyy stubiin (ks. §1).
@@ -108,31 +112,16 @@ Tor v3 -osoitteet ovat 56 merkkiä pitkiä. Sovellus vaatii `.onion` päätteen,
 - **Konfiguraatio**: Jos IDE ei löydä Javaa, lisää `gradle.properties` tiedostoon rivi: `org.gradle.java.home=/usr/lib/jvm/java-17-openjdk-amd64` (polku voi vaihdella käyttöjärjestelmästä riippuen).
 - **Gradle JVM Args**: Android-kehitinympäristössä `kapt` ja `compose` saattavat vaatia enemmän muistia. `gradle.properties` tiedostossa on `org.gradle.jvmargs=-Xmx2048m`, jotta kääntäminen ei kaadu muistiin (OutOfMemoryError).
 
----
-*Päivitetty viimeksi: 2026-11-02 (Tor-päivitys: tor-android 0.4.9.14, AGP 9)*
-
-## 12. Kartan ja Käyttöliittymän Päivitykset (UI/UX) - 24.1.2026 🗺️
-- **Undo-toiminto**: Korvattu kaksi erillistä poistonappia yhdellä `Undo (↩️)` -painikkeella, joka poistaa viimeisimmän reittipisteen.
-- **Reittipisteet**: Käytämme nyt numeroituja ("1", "2"...) markkereita emoji-kokeilujen sijaan selkeyden vuoksi.
-- **Rooli ja Ikonit**: Aloituspisteen ("Start") ikoni ja väri muuttuvat automaattisesti roolin mukaan (🚗/🔴 Driver, 🙋/🟢 Passenger).
-- **Pakotettu Roolivalinta**: Karttaa ei voi käyttää reitin luomiseen ennen kuin rooli on valittu (Overlay aukeaa automaattisesti).
-- **Broadcast Logiikka**: Broadcast menee automaattisesti pois päältä (OFF), jos reittiä muokataan (Undo tai uusi piste), jotta väärää tietoa ei lähetetä.
-- **Roolinvaihto bugi korjattu**: Roolin vaihtaminen tyhjentää nyt varmuudella _kaikki_ vanhat reittitiedot, estäen haamuviivojen jäämisen kartalle.
-- **Mukautetut Karttamerkit**: Toteutettu emoji-pohjaiset pyöreät ikonit aloituspisteelle (🏠/🚗/🙋) ja numeroitavat kultaiset pallot reittipistille (1, 2, 3...).
-- **Suorat viivat poistettu Drivereilta**: Syaaniväriset "varaviivat" eivät enää näy Driver-roolissa, vain Passenger-roolissa jos tiepohjaista reittiä ei ole laskettu.
-
-## 13. Tietoturvaparannukset (Security Hardening) - 12.2.2026 🔒
+## 11. Tietoturvaparannukset (Security Hardening) - 12.2.2026 🔒
 - **Päivityksen downgrade-suojaus**: `UpdateManager` hylkää päivitykset, joiden versiokoodi on <= nykyinen asennettu versio. Estää hyökkääjää pakottamasta vanhaa, haavoittuvaa versiota.
 - **FileProvider rajoitettu**: `file_paths.xml` sallii nyt vain `updates/`-alihakemiston (aiemmin koko cache-hakemisto `path="."`). APK-tiedostot tallennetaan nyt `cacheDir/updates/` kansioon.
 - **NSD/mDNS poistettu**: `NsdHelper.kt` poistettu kokonaan, WiFi-oikeudet (`ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE`) poistettu manifestista. Kaikki vertaisviestintä kulkee nyt vain Torin kautta — paikallisverkkoon ei vuoda mitään.
 - **Input-validointi**: `ConnectionManager` rajoittaa viestikoon (64 KB), katkaisee idle-yhteydet (60s), ja rajoittaa viestien määrää per IP (30/min). Estää OOM- ja flooding-hyökkäykset.
 - **SOCKS-portti**: `UpdateManager` käyttää nyt dynaamista Tor-porttia (`torManager.socksPort.value`) hardkoodatun 9050:n sijaan.
 
-https://github.com/turhanjuoksija/Samizdat
-https://github.com/turhanjuoksija/Samizdat/releases
-
-## 14. UI/UX Design Principles & Markers - 18.2.2026 🎨
+## 12. UI/UX Design Principles & Markers 🎨
 - **Kieli**: Käyttöliittymän kieli on aina **Englanti** (English). Ei suomenkielisiä tekstejä UI-komponenteissa.
+- **Roolivalinta & Reitin muokkaus**: Roolivalinta on pakotettu ennen reitin luontia, ja roolinvaihto tyhjentää varmuudella kaikki vanhat reittitiedot. Broadcast menee automaattisesti `OFF`-tilaan, jos reittiä muokataan (`Undo` tai uusi piste). Suora "linnuntie"-varaviiva näytetään vain `Passenger`-roolissa, ei `Driver`-roolissa.
 - **Deduplication (Requests & Offers)**: Samalta Onion-osoitteelta näytetään vain **uusin** viesti (oli kyseessä kyytipyyntö kuljettajalle tai kyytitarjous matkustajalle).
 - **Visual Linking (A, B, C...)**: Kyytipyynnöt numeroidaan kirjaimin listan otsikossa (`A — Ride Request`) ja kartalla (`Teardrop A`) yhteyden luomiseksi.
 - **Karttamarkkerien Värikoodit (Teardrop-tyyli)**:
@@ -140,7 +129,7 @@ https://github.com/turhanjuoksija/Samizdat/releases
     - **Driver**: Syaani (`#00BCD4`) pisara. Sisällä auto `🚗`.
 - **Offers Tab**: "Show on Map" -nappi (`[ 🗺️ ]`) toimii on/off-kytkimenä. Raakaa koordinaattidataa (lat/lon luvut) ei näytetä korteissa, vain "Pickup location available" -indikaattori.
 
-## 15. Future Rides (Scheduling) - 19.2.2026 🗓️
+## 13. Future Rides (Scheduling) - 19.2.2026 🗓️
 - **Tietokanta**: `RideIntent` -entiteetti (`ride_intents` -taulu). Kentät: `type` (OFFER/REQUEST), sijainti, `departureTime` (epoch millis), `status` (ACTIVE/EXPIRED/CANCELLED). Tietokannan versio nostettu **13**:een.
 - **GridMessage**: Lisätty `departureTime: Long?` ja `flexibleTimeWindow: Long?`. `null` = live-kyyti, asetettu = tulevaisuuden kyyti.
 - **DHT-protokolla**: Uudet kentät `dep_t` ja `time_win` JSON-viestissä. Vanha protokolla ei ymmärrä näitä — käyttäjän pitää päivittää (fresh install).
@@ -151,30 +140,36 @@ https://github.com/turhanjuoksija/Samizdat/releases
 - **Chat-First periaate**: Tulevaisuuden kyydit ovat "keskustelun aloittajia". Tavoite ei ole automaattinen varaus vaan yhteydenotto kuskin kanssa keskusteluun.
 - **TODO**: Chat-viestien linkittäminen tiettyyn tarjoukseen/matkaan. Nykyään Chat-sivu ei tiedä mihin kyytiin viesti liittyy.
 
-## 16. P2P Bootstrapping via Nostr (Sybil-resistant) 🌐 - 22.2.2026
+## 14. P2P Bootstrapping via Nostr (Sybil-resistant) 🌐 - 22.2.2026
 Sovellus käyttää Tor-verkon `.onion` osoitteita vertaisviestintään, mutta uusien käyttäjien löytäminen (bootstrapping) vaatii ulkopuolisen kerroksen.
 - **Nostr Relays**: Käytämme kaikille avoimia Nostr relay -palvelimia (kuten `wss://relay.damus.io` ja `wss://nos.lol`) julkistaaksemme ja löytääksemme muiden käyttäjien `.onion` osoitteita.
 - **Sybil-suojaus (NIP-13 PoW)**: Nostr on täysin avoin ja kuka tahansa voi luoda loputtomasti feikki-avaimia. Tämän estämiseksi vaadimme kryptografisen Proof-of-Workin (Työtodiste, NIP-13). 
   - Kun puhelin julkaisee osoitteensa, sen täytyy laskea SHA-256 tiivistettä kunnes saavutetaan *Difficulty 22* (ID:n pitää alkaa ainakin viidellä nollalla ja parilla bitillä). Tämä on tarkoituksella hidasta (kestää useamman minuutin puhelimella), mikä tekee massiivisesta spammaamisesta mahdotonta yhdelle hyökkääjälle.
   - Vain viestit, joiden PoW-vaatimus täyttyy, hyväksytään muilta.
 - **Tallennetut Tapahtumat ja Expiration (NIP-01 & NIP-40)**: Käytämme Nostr *Replaceable* Kind `10337`.  Nämä tallentuvat Relay-palvelimille. Jotta roskan määrä pysyy kurissa, lisäämme eventtiin NIP-40 `"expiration"` -tagin (7 päivää eteenpäin), jolloin Relay voi siivota sen automaattisesti pois.
-- **Rate-Limiting**: Puhelin julkaisee ja louhii PoW:n vain **kerran 24 tunnissa** (käytämme SharedPreferencesia tämän muistamiseen), paitsi jos `.onion` -osoite muuttuu, jolloin se julkaistaan välittömästi. Samalla oma sipuliosoite suodatetaan pois löydetyistä tuloksista.
+- **Rate-Limiting & Ajoitus**: Puhelin julkaisee ja louhii PoW:n vain **kerran 24 tunnissa** (SharedPreferences), paitsi jos `.onion`-osoite muuttuu. `publishOurOnion()` odottaa 20 s ennen raskasta PoW-louhintaa (alkukättelyt ehtivät ensin) ja kutsuu `markPublished()` vasta kun releeltä saadaan NIP-01 `["OK", ..., true, ...]` -kuittaus. Oma sipuliosoite suodatetaan pois löydetyistä tuloksista.
 - **TODO (Tietosuoja — Nostr kulkee vielä Torin ohi)**: `NostrBootstrapManager.kt` käyttää tällä hetkellä tavallista `OkHttpClient`:iä ilman SOCKS-proxya, jolloin Nostr-palvelimet näkevät puhelimen IP-osoitteen yhdessä julkaistun `.onion`-osoitteen kanssa. Korjataan erikseen reitittämällä Nostr-yhteydet Torin dynaamisen SOCKS-portin kautta (ja estämällä paikallinen DNS-vuoto kuten `TorTileDownloader`issa), kunhan kahden puhelimen `.onion`-viestintä on ensin varmistettu toimivaksi.
 
-## 17. App Update Gossiping (Nostr + P2P) - 23.2.2026 🔄
-Sovelluksen päivitykset levitetään P2P-verkossa ilman erillistä käyttöliittymää (Developer UI) sovelluksessa.
-- **Nostr Initial Broadcast**: Kehittäjä julkaisee uuden APK:n verkkoon tekemällä Nostr-verkon kautta tapahtuman (Kind `10338`). Tapahtuma sisältää tagit `samizdat_ver`, `samizdat_url` ja `samizdat_sig`.
-  - Toisin kuin peer-löydössä, tässä **ei** vaadita PoW-laskentaa, koska luottamus perustuu sovelluksen sisäänrakennettuun kehittäjän julkiseen avaimeen (Signature verification).
-- **P2P Gossip Propagation**: Kun mikä tahansa vertaislaite (peer) lataa ja vahvistaa uuden päivityksen (Signature OK), se tallentaa viestin välimuistiin (`cachedUpdateJson`).
-- **Passive Discovery**: Status-viestit sisältävät nyt uuden kentän: `"app_v"`. Kun laite, jolla on välimuistissa uusi päivitys, ottaa vastaan status-viestin laitteelta jolla on pienempi `"app_v"`, se lähettää päivitysviestin sille automaattisesti.
-- **Workflow**: 
-  1. Increment `versionCode` in `app/build.gradle.kts`.
-  2. Build APK: `./gradlew assembleRelease`
-  3. Run the automated script: `~/projects/samizdat/publish_update.sh` (This script gathers the APK, hashes it, signs the hash with `private_rsa.pem` using SHA256withRSA, publishes the `Kind 10338` event to Nostr, and stages the APK for hosting.)
-  4. Ensure Tor is running and serve the staging directory via Python HTTP server: `cd ~/samizdat_updates/ && python3 -m http.server 8080`.
-  5. **Note on Crypto**: All developer update signatures and internal identity keys run on **SHA256withRSA**, not Ed25519. Android devices running API < 33 (Android 13) do not have native KeyStore support for Ed25519, which caused silent signature validation failures on older devices.
+## 15. App Updates: Nostr + P2P Signed APK Seeding 🔄🛡️
+Sovelluksen päivitykset levitetään P2P-verkossa ilman sovelluskauppaa tai pysyvää palvelinta: puhelimet jakavat itse asennettua APK-tiedostoaan (`applicationInfo.sourceDir` / `base.apk`) suoraan toisilleen Tor-verkon yli.
+- **Nostr-julkaisu (Kind `10338`)**: Kehittäjä julkaisee allekirjoitetun manifestin Nostr-releihin (tagit `samizdat_ver`, `samizdat_sha256`, `samizdat_size`, `samizdat_sig`, `samizdat_sig2`, sekä valinnainen `samizdat_url`). Ei vaadi PoW-louhintaa, koska luottamus perustuu sisäänrakennettuun kehittäjän julkiseen RSA-avaimeen.
+- **Kryptografia**: Kaikki päivitysallekirjoitukset ja identiteettiavaimet käyttävät **SHA256withRSA**:ta, eivät Ed25519:ää (Android API < 33 KeyStore ei tue Ed25519:ää natiivisti).
+- **Passive Discovery & Gossip**: Status-viesteissä kulkee `"app_v"`. Kun vertainen, jolla on välimuistissa vahvistettu manifesti (`cachedUpdateJson`), vastaanottaa pienemmän `"app_v"`-version, se lähettää manifestin automaattisesti (rajoitettu max 1 kerta / vertainen / tunti).
+- **Kolmen lukon turvamalli (`UpdateManifest.kt` + `UpdateManager.kt`)**:
+  1. **Lukko 1 (Ennen latausta)**: RSA-allekirjoitukset `sig2` (`UPDATE2:<pkg>:<ver>:<size>:<sha256>`) ja `sig` (`UPDATE:<ver>:<sha256>`) tarkistetaan ennen ensimmäistäkään ladattua tai välitettyä tavua.
+  2. **Lukko 2 (Latauksen aikana ja jälkeen)**: Lataus katkeaa heti, jos koko ylittää allekirjoitetun `size`-arvon (ja ylärajan `MAX_APK_DOWNLOAD_BYTES` = 100 Mt), ja valmiin tiedoston SHA-256:n on täsmättävä `sha256`-kenttään. Tukee jatkolatausta (`HTTP Range`).
+  3. **Lukko 3 (Ennen asennusta)**: Ladatun APK:n allekirjoitusvarmenteen (`getPackageArchiveInfo`) on täsmättävä asennetun sovelluksen varmenteeseen, ja lataus sekä asennus vaativat aina käyttäjän kuittauksen UI-dialogissa.
+- **Itsenäinen P2P-jakaja (`ApkSeeder.kt` + `ConnectionManager.kt`)**:
+  - Kun puhelin saa oman asennetun versionsa allekirjoitetun manifestin ja oman `base.apk`:n koko + SHA-256 täsmäävät, se alkaa jakaa APK:ta osoitteestaan `http://<oma-onion>.onion/update_v<ver>.apk`.
+  - **DoS-rajoitukset (globaalit per jakaja, koska Tor-liikenne tulee `127.0.0.1`:stä)**: max **1 samanaikainen lähetys**, max **4 lähetystä / h**, max **150 Mt / 24 h**, max **20 min / lähetys**, ja oletuksena vain **Wi-Fi / mittaamaton verkko + akku >= 30 % (tai laturissa)**.
+- **Julkaisuprosessi (Workflow)**:
+  1. Nosta `versionCode` (ja `versionName`) tiedostossa `app/build.gradle.kts`.
+  2. Käännä APK: `./gradlew assembleRelease`
+  3. Aja `~/projects/samizdat/publish_update.sh` (laskee SHA-256:n ja koon, allekirjoittaa `private_rsa.pem`:llä, julkaisee Kind `10338` -manifestin Nostriin ja kopioi APK:n `~/samizdat_updates/update_v<N>.apk`).
+  4. Asenna APK omalle puhelimelle → puhelin varmistaa oman APK:nsa ja aloittaa P2P-jaon Torin yli (läppärin HTTP-palvelinta ei tarvita; valinnainen vain legacy v18 -asiakkaille).
+- **Release Keystore (`keystore.properties`)**: `app/build.gradle.kts` käyttää omaa release-keystorea jos `keystore.properties` löytyy juuresta, muuten varalla debug-avainta. Säilytä `private_rsa.pem` ja release-keystore erillään ja varmuuskopioituina!
 
-## 18. Tietoturvaparannukset v2 (Security Hardening Phase 2) - 3.3.2026 🔒
+## 16. Tietoturvaparannukset v2 (Security Hardening Phase 2) - 3.3.2026 🔒
 Toteutettiin laaja koodikatselmointi ja korjattiin löydetyt kriittiset ja korkean tason haavoittuvuudet:
 - **Nostr Schnorr Signature Verification (Kriittinen)**: `NostrBootstrapManager` vahvistaa nyt Nostr-eventtien `sig`-kentän (BIP340 Schnorr) käyttämällä eventin ID:tä, estäen väärennettyjen onion-osoitteiden ja päivitystapahumien syöttämisen. ID:n uudelleenlaskenta on vain varoitus (yhteensopivuus mm. `nak`-työkalun kanssa).
 - **Android Backup poistettu (Kriittinen)**: `AndroidManifest.xml` -> `allowBackup="false"`. Estää Torin `.onion` yksityisavaimen ja Room-tietokannan viennin ADB-backupilla.
@@ -182,49 +177,7 @@ Toteutettiin laaja koodikatselmointi ja korjattiin löydetyt kriittiset ja korke
 - **Strict Tor Routing (Korkea)**: `ConnectionManager.sendMessage` hyväksyy vain `.onion` päätteisiä osoitteita ja verkkovirheet heittävät `SecurityException`. Estää suorat TCP IP -yhteydet ja IP:n paljastumisen.
 - **APK Download Size Limit (Korkea)**: `UpdateManager` rajoittaa päivitystiedostot enintään 100 MB kokoiseksi (`MAX_APK_DOWNLOAD_BYTES`), suojaten laitteen tallennustilan täyttämiseltä.
 
-## 19. Tor-päivitys: kmp-tor → tor-android 0.4.9.14 - 2.11.2026 🧅
-Syy: kmp-torin Tor oli 0.4.8.13 (EOL 1.6.2026, konsensus ei enää suosittele). kmp-tor-resource ei ole julkaissut helmikuun jälkeen.
-- **Kirjastot**: `info.guardianproject:tor-android:0.4.9.14` (Tor 0.4.9.14, OpenSSL 3.5.x) + `jtorctl:0.4.5.7` + `androidx.localbroadcastmanager`.
-- **`SamizdatTorManager`**: julkinen API ennallaan (`socksPort`, `onionAddress`, `isBootstrapped`, `statusMessage`, `startTor()`, `stopTor()`, `bootstrapManager`). Sisäisesti: torrc → `LocalBroadcastManager`-vastaanotin (`ACTION_STATUS`/`ACTION_ERROR`) → `bindService(TorService)` → `STATUS_ON` → `net/listeners/socks` → `ADD_ONION`.
-- **Onion-avain (osoite säilyy)**: `filesDir/onion_v3_private_key` = 64 tavua raakaa ED25519-laajennettua avainta (sama muoto kuin kmp-torilla). Olemassa oleva avain → `ADD_ONION ED25519-V3:<base64>`. Uusi → `NEW:ED25519-V3`, Torin palauttama `onionPrivKey` dekoodataan ja tallennetaan samaan tiedostoon (vain jos tasan 64 tavua). Lokiin kirjataan vain pituus. Hidden service: virtuaaliportti 80 → `127.0.0.1:12345`.
-- **Rajoitus – uudelleenkäynnistys samassa prosessissa**: Tor ajetaan JNI:llä (`tor_run_main`), ja TorServicessa on staattinen lukko. Toria ei saa ajaa kahdesti samanaikaisesti, ja toinen ajo samassa prosessissa on upstreamissa "best effort" (tor bug #23847). `PeersViewModel.onCleared()` kutsuu `stopTor()`, joten Back + avaus uudelleen käynnistää Torin samassa prosessissa. `startTor()` odottaa siksi vähintään 5 s edellisen pysäytyksen jälkeen. Jos tämä osoittautuu epävakaaksi, vaihtoehto on olla pysäyttämättä Toria `onCleared()`issa.
-- **Siivous**: Ensimmäisellä käynnistyksellä poistetaan kmp-torin `filesDir/torservice` ja `cacheDir/torservice` (pienellä kirjoitettuna; tor-androidin omat hakemistot ovat `app_TorService` ja `cacheDir/TorService`). Avaintiedostoon ei kosketa.
-- **Käännösympäristö** päivitetty samassa yhteydessä (§11): AGP 9.4.1, Gradle 9.8.2, Kotlin 2.3.21, Room 2.8.5, Compose BOM 2026.09.00, compile SDK 37.1.
-- **kapt & Java 24 -gotcha (ks. §1 & §2)**: `TorService`-tyyppi pidetty pois kenttien/metodien tyypeistä (kapt JDK 17 ei lue class 68 -tavukoodia). Kotlin lukittu 2.3.x Room 2.8.5 -kaptin metadatarajoituksen vuoksi. Pysyvä ratkaisu myöhemmin: Room → KSP.
-- **Tila & Testaus**: Käännökset (`assembleDebug`, `assembleRelease`) OK. Testattu laitteella (Nokia X30 5G, Android 14): .onion-osoite säilyi identtisenä vanhan kmp-tor-asennuksen (build 17) päälle päivitettäessä, Tor 0.4.9.14 yhdisti verkkoon ja loi hidden servicen. Back-napin jälkeinen uudelleenkäynnistys samassa prosessissa testattu ja toimii 5 s varoajan ansiosta. Seuraavaksi: 2-laitteen P2P-viestintätesti.
-
-## 20. P2P Signed App Update Seeding (3-Lock Model & DoS Quotas) - 13.11.2026 🔄🛡️
-Päivitetty P2P-päivitysarkkitehtuuri niin, että puhelimet jakavat itse asennettua APK-tiedostoaan (`applicationInfo.sourceDir` / `base.apk`) suoraan toisilleen Tor-verkon yli ilman, että kehittäjän läppäriä tarvitsee pitää päällä.
-- **Kolmen lukon turvamalli (`UpdateManifest.kt` + `UpdateManager.kt`)**:
-  1. **Lukko 1 (Ennen latausta)**: Kehittäjän RSA-allekirjoitus `sig2` (`UPDATE2:<pkg>:<ver>:<size>:<sha256>`) ja `sig` (`UPDATE:<ver>:<sha256>`) tarkistetaan **ennen kuin yhtään tavua ladataan tai välitetään eteenpäin**. Estää väärennetyillä Nostr/gossip-viesteillä pakotetut turhat lataukset ja versiolukitukset.
-  2. **Lukko 2 (Latauksen aikana ja jälkeen)**: Lataus katkeaa välittömästi, jos koko ylittää allekirjoitetun `size`-arvon, ja valmiin tiedoston SHA-256-tiivisteen on täsmättävä `sha256`-kenttään. Tukee jatkolatausta (`HTTP Range`).
-  3. **Lukko 3 (Ennen asennusta)**: Ladatun APK:n allekirjoitusvarmenteen (`getPackageArchiveInfo`) on täsmättävä asennetun sovelluksen varmenteeseen, ja lataus sekä asennus vaativat aina käyttäjän kuittauksen UI-dialogissa.
-- **Itsenäinen P2P-jakaja (`ApkSeeder.kt` + `ConnectionManager.kt`)**:
-  - Kun puhelin vastaanottaa oman asennetun versionsa allekirjoitetun manifestin (Nostrista tai vertaiselta), se tarkistaa oman `base.apk`-tiedostonsa koon ja SHA-256-tiivisteen. Jos ne täsmäävät, puhelin alkaa jakaa APK:ta osoitteestaan `http://<oma-onion>.onion/update_v<ver>.apk`.
-  - **DoS-rajoitukset**: Koska kaikki Tor-liikenne saapuu osoitteesta `127.0.0.1`, rajoitukset ovat globaaleja per jakaja: max **1 samanaikainen lähetys**, max **4 lähetystä tunnissa**, max **150 Mt / 24 h**, max 20 min per lähetys, ja oletuksena vain **Wi-Fi/mittaamaton verkko + akku >= 30 % (tai laturissa)**. Manifestien gossip on rajoitettu max 1 kertaan per vertainen per tunti.
-- **Release Keystore (`keystore.properties`)**:
-  - `app/build.gradle.kts` käyttää omaa release-keystorea, jos projektin juuressa on `keystore.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`), ja muuten varalla debug-avainta. Säilytä `private_rsa.pem` ja release-keystore erillään ja varmuuskopioituina!
-
-## 21. Kenttätestikorjaukset (Field Test Bug Fixes v0.7.2-alpha / Build 21) - 18.11.2026 🛠️
-Korjattiin 16.11.2026 kenttätestin (`BugReport-2026-11-18.md`) perusteella tunnistetut bugit (`BUG-1`–`BUG-8`):
-- **BUG-1 (`.onion`-yhteydet & Hidden Service)**:
-  - `ConnectionManager.sendMessage()` nosti connect-timeoutin 30 s → **90 s** (`ONION_CONNECT_TIMEOUT_MS`), asetti `socket.soTimeout = 60_000`, ja lisäsi automaattisen **3 yrityksen uudelleenyrityssilmukan** (5 s * yritys -viiveellä).
-  - `SamizdatTorManager.setupHiddenService()` kutsuu nyt `conn.addOnion(..., discardPK = false, detach = true)` (`Detach`-lippu), tallentaa osoitteen `filesDir/onion_v3_hostname`-tiedostoon ja toipuu mahdollisesta samassa prosessissa tapahtuvasta `collision`-virheestä.
-- **BUG-2 & BUG-3 (`BackHandler` & ViewModel-riippuvuudet)**:
-  - `MainScreen` (`MainActivity.kt`) käsittelee Back-painikkeen: poistuu pickup-valinnasta, palaa muilta välilehdiltä `MAP`-välilehdelle ja siirtää `MAP`-välilehdellä sovelluksen taustalle (`moveTaskToBack(true)`) tuhoamatta `MainActivity`:a, `PeersViewModel`:ia tai Toria.
-  - `SamizdatTorManager`, `ConnectionManager`, `PeerRepository`, `UpdateManager`, `ApkSeeder`, `SegmentManager` ja `TorTileDownloader.socksPortProvider` luodaan nyt `PeersViewModelFactory.create()`-metodin sisällä, joten näytön kääntö tai teeman vaihto ei luo ylimääräisiä käsittelijöitä eikä nollaa tiililataajan SOCKS-porttia.
-- **BUG-4 (`pingAllPeers` & taustaping)**:
-  - `PeersViewModel.pingAllPeers()` kirjaa virheet nyt myös `_debugLogs`-listaan (`PING FAILED`), estää päällekkäiset pingit samalle `.onion`-osoitteelle (`pingsInFlight`), ja 30 s taustasilmukka pingaa hiljaisesti offline-peerejä (`quiet = true`) silloin kun broadcast ei ole päällä.
-- **BUG-5 (Nostr-julkaisu & PoW-ajoitus)**:
-  - `NostrBootstrapManager.publishOurOnion()` odottaa 20 s ennen raskaan 22-bittisen PoW-louhinnan käynnistystä, jotta alkudiscovery ja ensimmäiset `.onion`-kättelyt ehtivät valmistua ensin.
-  - `broadcastToRelays()` odottaa NIP-01 `["OK", <event_id>, true, ...]` -kuittausta ennen `markPublished()`-kutsua; `NostrPoWMiner` lokittaa väliaikatulokset vain Logcatiin (`Log.d`) UI-lokin täyttymisen estämiseksi; WebSocket-yhteyden avautumiselle ja EOSE-vastaukselle annetaan dynaaminen odotus.
-- **BUG-6, BUG-7 & BUG-8 (UI-viilaukset)**:
-  - `ContactsScreen`: yhteystietokortin nimi/tähdet ja etäisyys omalla rivillään, `Onion: ...` omalla rivillään.
-  - `MapComposable`: poistettu päällekkäinen sininen `roadRoute`-viiva (säilytetty yksi syaani tiepohjainen reittiviiva + matkustajan suoran viivan vara).
-  - `SettingsScreen`: `Debug Logs` -rivikorkeudeksi asetettu `lineHeight = 13.sp`.
-- **HUOM**: v21 ei korjannut viestintää. Varsinainen juurisyy löytyi vasta v22:ssa (§22).
-
-## 22. JUURISYY: Paikallinen palvelin kuunteli IPv6-osoitetta `::1` (v0.7.3-alpha / Build 22) - 18.11.2026 🎯
+## 17. JUURISYY: Paikallinen palvelin kuunteli IPv6-osoitetta `::1` (v0.7.3-alpha / Build 22) - 18.11.2026 🎯
 - **Oire**: Kaikki `.onion`-yhteydet (viestit, ping, kättely) epäonnistuivat molempiin suuntiin virheellä `SOCKS server general failure`.
 - **Diagnoosi (läppärin Tor 0.4.9.11, `SocksPort ... ExtendedErrors`, `Log [rend]info [app]info`)**: `curl --socks5-hostname 127.0.0.1:19050 http://<puhelimen-onion>/` → HS-kuvaus löytyi, INTRODUCE_ACK = ack, RENDEZVOUS2 saatiin, BEGIN lähetettiin portille 80 → puhelin vastasi heti `END (misc error)` ennen CONNECTED-vastausta. Tor-verkko ja onion-palvelu toimivat siis, mutta puhelimen Tor ei saanut yhteyttä paikalliseen kohteeseen `127.0.0.1:12345`.
 - **Juurisyy**: Commit `b8b26f4` (3.3.2026, "Bind ServerSocket to localhost loopback only") vaihtoi `ServerSocket(port)` → `ServerSocket(port, 50, InetAddress.getLoopbackAddress())`. **Androidilla `getLoopbackAddress()` palauttaa AINA IPv6-osoitteen `::1`** (AOSP: *"Android-changed: Always returns IPv6 loopback address in Android"*). Palvelin kuunteli siis vain `[::1]:12345`, mutta `ADD_ONION Port=80,127.0.0.1:12345` ohjaa IPv4-osoitteeseen → yhteys evätään → Tor lähettää asiakkaalle `END misc` → asiakkaan Java näyttää `SOCKS server general failure`. Viestintä on ollut rikki maaliskuusta 2026 lähtien.
@@ -233,3 +186,8 @@ Korjattiin 16.11.2026 kenttätestin (`BugReport-2026-11-18.md`) perusteella tunn
 - **Lokit**: Debug Logsin jokaisella rivillä on nyt aikaleima (`HH:mm:ss.SSS`), lista on rajattu 1500 riviin, palvelimen käynnistys/virhe (`SERVER: Listening on 127.0.0.1:12345` / `SERVER ERROR`), saapuvat HTTP-pyynnöt, SOCKS-portti ja oma onion-osoite kirjataan, ja `DHT SYNC` kirjataan vain kun synkronoitava alue muuttuu. "Share Logs" jakaa koko lokin + otsikon (versio, onion, Tor-tila).
 - **Testausvinkki (yhdellä puhelimella)**: Käynnistä läppärillä erillinen Tor (`SocksPort 127.0.0.1:19050 ExtendedErrors`) ja aja `curl -v --socks5-hostname 127.0.0.1:19050 http://<puhelimen-onion>/`. Toimiva puhelin vastaa HTTP-vastauksella (ApkSeeder), ja puhelimen Debug Logsiin tulee rivi `SERVER: Incoming HTTP GET ...`. SOCKS-koodit: `0xF0` kuvausta ei löydy, `0xF2` esittely epäonnistui (vanha kuvaus / palvelu ei käynnissä), `0x01` esim. paikallinen kohde ei vastaa.
 - **Huom. vanhentuneet kuvaukset**: Kun sovellus käynnistetään uudelleen, toisten Tor-asiakkaiden välimuistissa voi olla vanha HS-kuvaus vanhoilla esittelypisteillä (`INTRODUCE_ACK nack, reason 1`). Tor hakee uuden kuvauksen automaattisesti, ja `ConnectionManager`in kolme uudelleenyritystä (v21) kattavat tämän.
+
+---
+- Repository: https://github.com/turhanjuoksija/Samizdat
+- Releases: https://github.com/turhanjuoksija/Samizdat/releases
+- *Päivitetty viimeksi: 2026-11-21*
